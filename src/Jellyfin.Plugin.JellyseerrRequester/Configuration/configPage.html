@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Jellyseerr Requester</title>
+</head>
+<body>
+<div id="JellyseerrRequesterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+    <style>
+        #JellyseerrRequesterConfigPage .jsr-intro { max-width: 60ch; opacity: .8; line-height: 1.5; margin-top: .25em; }
+        #JellyseerrRequesterConfigPage .jsr-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(13em, 1fr)); gap: .75em; margin: 1.25em 0 0; padding: 0; list-style: none; }
+        #JellyseerrRequesterConfigPage .jsr-steps li { display: flex; gap: .6em; align-items: flex-start; padding: .85em 1em; border-radius: 12px; background: rgba(128, 128, 128, .1); line-height: 1.4; font-size: .92em; }
+        #JellyseerrRequesterConfigPage .jsr-steps .material-icons { color: #6366f1; font-size: 1.35em; flex: none; }
+        #JellyseerrRequesterConfigPage .jsr-steps b { display: block; margin-bottom: .1em; }
+        #JellyseerrRequesterConfigPage .jsr-test-row { display: flex; flex-wrap: wrap; align-items: center; gap: .75em 1em; }
+        #JellyseerrRequesterConfigPage .jsr-test-row .emby-button { margin: 0; }
+        #JellyseerrRequesterConfigPage .jsr-status { display: flex; align-items: center; gap: .5em; font-size: .95em; line-height: 1.4; }
+        #JellyseerrRequesterConfigPage .jsr-status[hidden] { display: none; }
+        #JellyseerrRequesterConfigPage .jsr-status .material-icons { font-size: 1.25em; flex: none; }
+        #JellyseerrRequesterConfigPage .jsr-status-ok .material-icons { color: #22c55e; }
+        #JellyseerrRequesterConfigPage .jsr-status-error .material-icons { color: #ef4444; }
+        #JellyseerrRequesterConfigPage .jsr-status-busy { opacity: .75; }
+        #JellyseerrRequesterConfigPage .jsr-group { margin-left: 1.9em; padding-left: 1em; border-left: 2px solid rgba(128, 128, 128, .25); transition: opacity .2s; }
+        #JellyseerrRequesterConfigPage .jsr-group.jsr-off { opacity: .45; }
+        #JellyseerrRequesterConfigPage .jsr-notice { display: flex; gap: .6em; align-items: flex-start; margin: .5em 0 0; padding: .75em 1em; border-radius: 12px; background: rgba(217, 119, 6, .14); line-height: 1.4; font-size: .92em; }
+        #JellyseerrRequesterConfigPage .jsr-notice[hidden] { display: none; }
+        #JellyseerrRequesterConfigPage .jsr-notice .material-icons { color: #d97706; font-size: 1.25em; flex: none; }
+        @media (prefers-reduced-motion: reduce) {
+            #JellyseerrRequesterConfigPage .jsr-group { transition: none; }
+        }
+    </style>
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="JellyseerrRequesterConfigForm">
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Jellyseerr Requester</h2>
+                    <p class="jsr-intro">Titles from Jellyseerr appear in Jellyfin search, next to your library, and users can request them from any Jellyfin app.</p>
+                    <ul class="jsr-steps">
+                        <li>
+                            <span class="material-icons search" aria-hidden="true"></span>
+                            <span><b>Search</b>Titles that aren't in the library yet show up in the Movies and Shows rows.</span>
+                        </li>
+                        <li>
+                            <span class="material-icons favorite" aria-hidden="true"></span>
+                            <span><b>Favorite to request</b>The heart button on a movie, a show or a single season sends the request.</span>
+                        </li>
+                        <li>
+                            <span class="material-icons person" aria-hidden="true"></span>
+                            <span><b>As the user</b>Requests use the user's own Jellyseerr account, quotas and approvals.</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Connection</h3>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="url" id="JellyseerrUrl" label="Jellyseerr URL" placeholder="http://jellyseerr:5055" required />
+                        <div class="fieldDescription">The address the Jellyfin <b>server</b> uses to reach Jellyseerr.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="password" id="ApiKey" label="API key" autocomplete="off" required />
+                        <div class="fieldDescription">In Jellyseerr: Settings, General, API Key.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="url" id="PublicJellyseerrUrl" label="Public Jellyseerr URL (optional)" placeholder="https://requests.example.com" />
+                        <div class="fieldDescription">The address users' browsers use for "Open in Jellyseerr" links. Leave empty to use the URL above.</div>
+                    </div>
+                    <div class="jsr-test-row">
+                        <button is="emby-button" type="button" id="btnTestConnection" class="raised button-alt">
+                            <span>Test connection</span>
+                        </button>
+                        <div id="testResult" class="jsr-status" role="status" aria-live="polite" hidden>
+                            <span class="material-icons" aria-hidden="true"></span>
+                            <span class="jsr-status-text"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Search results</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="InjectIntoSearch" />
+                            <span>Add Jellyseerr titles to Jellyfin search</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Works in every app: web, Swiftfin, Android TV and mobile.</div>
+                    </div>
+                    <div id="searchOptions" class="jsr-group">
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="MaxResults" min="1" max="50" label="Titles per search" />
+                            <div class="fieldDescription">Up to this many movies and this many shows, between 1 and 50.</div>
+                        </div>
+                        <div class="checkboxContainer">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="HideAvailable" />
+                                <span>Leave out titles that are already fully available</span>
+                            </label>
+                        </div>
+                        <div class="checkboxContainer">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="BadgePosters" />
+                                <span>Show the status on posters (Request, Requested, Downloading)</span>
+                            </label>
+                        </div>
+                        <div class="checkboxContainer">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="ShowHintInOverview" />
+                                <span>Explain how to request at the top of the overview</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Requests</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="AllowUnlinkedUsers" />
+                            <span>Let users without a Jellyseerr account request</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            Users are matched to Jellyseerr by Jellyfin user ID, then by user name. When this is on, users with no match request as the owner of the API key.
+                        </div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="Enable4K" />
+                            <span>Offer 4K requests</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Adds a Standard or 4K choice to the Request dialog in Jellyfin web. Needs a 4K server set up in Jellyseerr.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Jellyfin web</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="InjectClientScript" />
+                            <span>Add a Request button with a season picker to detail pages</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Uses the File Transformation plugin when installed, otherwise patches index.html.</div>
+                    </div>
+                    <div id="restartNotice" class="jsr-notice" hidden>
+                        <span class="material-icons restart_alt" aria-hidden="true"></span>
+                        <span>Restart Jellyfin after saving for this change to take effect.</span>
+                    </div>
+                </div>
+
+                <button is="emby-button" type="submit" class="raised button-submit block">
+                    <span>Save</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = '980e2692-ff98-45ad-9eb2-0df748ceb82e';
+            var page = document.querySelector('#JellyseerrRequesterConfigPage');
+            var textFields = ['JellyseerrUrl', 'ApiKey', 'PublicJellyseerrUrl'];
+            var boolFields = ['InjectIntoSearch', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview', 'InjectClientScript', 'AllowUnlinkedUsers', 'Enable4K'];
+            var searchOptionIds = ['MaxResults', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview'];
+            var savedClientScript = null;
+            var testSeq = 0;
+
+            function el(id) { return page.querySelector('#' + id); }
+
+            // Search sub-options only matter while search injection is on.
+            function syncSearchOptions() {
+                var on = el('InjectIntoSearch').checked;
+                el('searchOptions').classList.toggle('jsr-off', !on);
+                searchOptionIds.forEach(function (id) { el(id).disabled = !on; });
+            }
+
+            function syncRestartNotice() {
+                el('restartNotice').hidden = savedClientScript === null || el('InjectClientScript').checked === savedClientScript;
+            }
+
+            function setStatus(kind, text) {
+                var box = el('testResult');
+                var icon = { ok: 'check_circle', error: 'error', busy: 'sync', idle: 'info' }[kind];
+                box.hidden = !text;
+                box.className = 'jsr-status jsr-status-' + kind;
+                box.querySelector('.material-icons').className = 'material-icons ' + icon;
+                box.querySelector('.jsr-status-text').textContent = text || '';
+            }
+
+            function testConnection() {
+                var url = el('JellyseerrUrl').value.trim();
+                var apiKey = el('ApiKey').value.trim();
+                if (!url || !apiKey) {
+                    setStatus('idle', 'Enter the Jellyseerr URL and API key to test the connection.');
+                    return;
+                }
+
+                var seq = ++testSeq;
+                var button = el('btnTestConnection');
+                button.disabled = true;
+                setStatus('busy', 'Testing connection…');
+                fetch(ApiClient.getUrl('JellyseerrRequester/TestConnection'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'MediaBrowser Token="' + ApiClient.accessToken() + '"'
+                    },
+                    body: JSON.stringify({ url: url, apiKey: apiKey })
+                }).then(function (r) {
+                    return r.json().catch(function () { return {}; }).then(function (body) {
+                        if (seq === testSeq) {
+                            setStatus(r.ok ? 'ok' : 'error', body.message || body.Message || ('HTTP ' + r.status));
+                        }
+                    });
+                }).catch(function (err) {
+                    if (seq === testSeq) {
+                        setStatus('error', 'Could not reach Jellyfin: ' + err.message);
+                    }
+                }).then(function () {
+                    button.disabled = false;
+                });
+            }
+
+            page.addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    textFields.forEach(function (f) { el(f).value = config[f] || ''; });
+                    boolFields.forEach(function (f) { el(f).checked = !!config[f]; });
+                    el('MaxResults').value = config.MaxResults || 10;
+                    savedClientScript = !!config.InjectClientScript;
+                    syncSearchOptions();
+                    syncRestartNotice();
+                    setStatus('idle', '');
+                    Dashboard.hideLoadingMsg();
+                    // Show straight away whether the saved settings work.
+                    if (config.JellyseerrUrl && config.ApiKey) {
+                        testConnection();
+                    }
+                });
+            });
+
+            el('InjectIntoSearch').addEventListener('change', syncSearchOptions);
+            el('InjectClientScript').addEventListener('change', syncRestartNotice);
+            el('btnTestConnection').addEventListener('click', testConnection);
+
+            el('JellyseerrRequesterConfigForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    textFields.forEach(function (f) { config[f] = el(f).value.trim(); });
+                    boolFields.forEach(function (f) { config[f] = el(f).checked; });
+                    config.MaxResults = Math.min(50, Math.max(1, parseInt(el('MaxResults').value, 10) || 10));
+                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                        el('MaxResults').value = config.MaxResults;
+                    });
+                });
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>

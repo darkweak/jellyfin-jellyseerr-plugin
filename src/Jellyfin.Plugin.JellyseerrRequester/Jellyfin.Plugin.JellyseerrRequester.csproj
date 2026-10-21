@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Build targets:
+      Jellyfin 12.x    -> dotnet build                       (net10.0, default)
+      Jellyfin 10.11.x -> dotnet build -p:JellyfinTarget=10.11 (net9.0)
+  -->
+  <PropertyGroup>
+    <JellyfinTarget Condition="'$(JellyfinTarget)' == ''">12</JellyfinTarget>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(JellyfinTarget)' == '12'">
+    <TargetFramework>net10.0</TargetFramework>
+    <JellyfinPackageVersion>12.2.0</JellyfinPackageVersion>
+    <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(JellyfinTarget)' == '10.11'">
+    <TargetFramework>net9.0</TargetFramework>
+    <JellyfinPackageVersion>10.11.0</JellyfinPackageVersion>
+    <SkiaSharpVersion>3.116.1</SkiaSharpVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Jellyfin.Plugin.JellyseerrRequester</RootNamespace>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Provided by the Jellyfin server at runtime: never copy them to the output. -->
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <!-- Same version Jellyfin bundles; used to draw status badges on posters. -->
+    <PackageReference Include="SkiaSharp" Version="$(SkiaSharpVersion)">
+      <ExcludeAssets>runtime;native</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+    <None Remove="Web\jellyseerr-requester.js" />
+    <EmbeddedResource Include="Web\jellyseerr-requester.js" />
+  </ItemGroup>
+
+</Project>
