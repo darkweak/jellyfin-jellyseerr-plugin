@@ -32,6 +32,7 @@ public class RequesterService
 
     private static readonly TimeSpan SearchCacheDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan TitleCacheDuration = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan DiscoverCacheDuration = TimeSpan.FromMinutes(10);
 
     private readonly JellyseerrClient _client;
     private readonly IServerApplicationHost _host;
@@ -40,6 +41,7 @@ public class RequesterService
 
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<List<SearchItemDto>> Task)> _searchCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<VirtualId, CachedTitle> _titles = new();
+    private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<DiscoverResponseDto> Task)> _discoverCache = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RequesterService"/> class.
@@ -101,26 +103,33 @@ public class RequesterService
             if (item is null || item.Id <= 0
                 || item.Status == (int)MediaStatus.Blacklisted
                 || (hideAvailable && item.Status == (int)MediaStatus.Available)
-                || IsInLibrary(item))
+                || FindInLibrary(item) is not null)
             {
                 continue;
             }
 
             results.Add(item);
-            var id = new VirtualId(item.MediaType == "movie" ? VirtualKind.Movie : VirtualKind.Series, item.Id);
-            _titles.AddOrUpdate(
-                id,
-                _ => new CachedTitle(item, null, false),
-                (_, existing) => existing with { Item = MergeSearch(existing.Item, item) });
+            CacheListedTitle(item);
         }
 
         return results;
     }
 
+    private void CacheListedTitle(SearchItemDto item)
+    {
+        _titles.AddOrUpdate(
+            ToVirtualId(item),
+            _ => new CachedTitle(item, null, false),
+            (_, existing) => existing with { Item = MergeSearch(existing.Item, item) });
+    }
+
+    private static VirtualId ToVirtualId(SearchItemDto item) =>
+        new(item.MediaType == "movie" ? VirtualKind.Movie : VirtualKind.Series, item.Id);
+
     /// <summary>
-    /// Whether the title is already in the Jellyfin library (Jellyseerr's availability sync can lag behind).
+    /// Finds the title in the Jellyfin library by TMDB id (Jellyseerr's availability sync can lag behind).
     /// </summary>
-    private bool IsInLibrary(SearchItemDto item)
+    private Guid? FindInLibrary(SearchItemDto item)
     {
         try
         {
@@ -132,12 +141,13 @@ public class RequesterService
                 Limit = 1,
                 DtoOptions = new DtoOptions(false)
             };
-            return _libraryManager.GetItemList(query).Count > 0;
+            var found = _libraryManager.GetItemList(query);
+            return found.Count > 0 ? found[0].Id : null;
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Jellyseerr Requester: library lookup failed for TMDB {Id}", item.Id);
-            return false;
+            return null;
         }
     }
 
@@ -148,6 +158,86 @@ public class RequesterService
         fresh.Genres ??= existing.Genres;
         fresh.RuntimeMinutes ??= existing.RuntimeMinutes;
         return fresh;
+    }
+
+    // ------------------------------------------------------------------ discover
+
+    /// <summary>
+    /// Gets a home page row from Jellyseerr's discover lists. Cached for a few minutes: these lists change slowly.
+    /// </summary>
+    /// <param name="list">"trending", "movies" (popular movies) or "tv" (popular shows).</param>
+    /// <returns>The row.</returns>
+    public Task<DiscoverResponseDto> DiscoverAsync(string list)
+    {
+        if (list is not ("trending" or "movies" or "tv"))
+        {
+            throw new JellyseerrException(StatusCodes.Status400BadRequest, "Unknown list.");
+        }
+
+        var now = DateTime.UtcNow;
+        if (_discoverCache.TryGetValue(list, out var cached) && cached.Expiry > now && !cached.Task.IsFaulted)
+        {
+            return cached.Task;
+        }
+
+        var task = DiscoverUncachedAsync(list);
+        _discoverCache[list] = (now + DiscoverCacheDuration, task);
+        return task;
+    }
+
+    private async Task<DiscoverResponseDto> DiscoverUncachedAsync(string list)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var max = Math.Clamp(Config.DiscoverItemCount, 1, 60);
+        var hideInLibrary = Config.DiscoverHideInLibrary;
+        var forcedType = list switch { "movies" => "movie", "tv" => "tv", _ => null };
+        var dto = new DiscoverResponseDto { List = list };
+        var seen = new HashSet<VirtualId>();
+
+        // 20 titles per page; read a few pages when titles are left out.
+        for (var page = 1; page <= 3 && dto.Results.Count < max; page++)
+        {
+            var raw = await _client.DiscoverAsync(list, page, cts.Token).ConfigureAwait(false);
+            foreach (var node in raw?["results"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray())
+            {
+                // Trending also lists people; ToSearchItem skips them.
+                var item = JellyseerrMapper.ToSearchItem(node, forcedType);
+                if (item is null || item.Id <= 0 || item.Status == (int)MediaStatus.Blacklisted || !seen.Add(ToVirtualId(item)))
+                {
+                    continue;
+                }
+
+                var libraryId = FindInLibrary(item);
+                if (libraryId is not null && hideInLibrary)
+                {
+                    continue;
+                }
+
+                CacheListedTitle(item);
+                dto.Results.Add(new DiscoverItemDto
+                {
+                    ItemId = (libraryId ?? ToVirtualId(item).ToGuid()).ToString("N"),
+                    InLibrary = libraryId is not null,
+                    TmdbId = item.Id,
+                    MediaType = item.MediaType,
+                    Title = item.Title,
+                    Year = item.Year,
+                    Status = item.Status,
+                    ImageTag = libraryId is null ? ImageTag(item.PosterPath, item.Status) : null
+                });
+                if (dto.Results.Count >= max)
+                {
+                    break;
+                }
+            }
+
+            if (page >= (raw?["totalPages"]?.GetValue<int>() ?? 1))
+            {
+                break;
+            }
+        }
+
+        return dto;
     }
 
     // ------------------------------------------------------------------ titles
@@ -335,10 +425,8 @@ public class RequesterService
 
         // Force a refresh on next details view, so Jellyseerr's view of the request wins.
         _titles[id] = title with { FetchedAt = DateTime.MinValue };
-        foreach (var key in _searchCache.Keys)
-        {
-            _searchCache.TryRemove(key, out _);
-        }
+        _searchCache.Clear();
+        _discoverCache.Clear();
     }
 
     // ------------------------------------------------------------------ Jellyfin DTOs

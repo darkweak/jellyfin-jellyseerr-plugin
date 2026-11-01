@@ -64,4 +64,27 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets a value indicating whether a 4K request option is offered.
     /// </summary>
     public bool Enable4K { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Trending, Popular Movies and Popular TV rows from Jellyseerr
+    /// are added to the Jellyfin web home page.
+    /// </summary>
+    public bool ShowDiscoverRows { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the number of titles per home page row.
+    /// </summary>
+    public int DiscoverItemCount { get; set; } = 20;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether titles already in the Jellyfin library are left out of the home page rows.
+    /// When false, they are shown and open the library item.
+    /// </summary>
+    public bool DiscoverHideInLibrary { get; set; }
+
+    /// <summary>
+    /// Whether the web client script is needed (Request button or home page rows).
+    /// </summary>
+    /// <returns>True when the script should be injected.</returns>
+    public bool NeedsClientScript() => InjectClientScript || ShowDiscoverRows;
 }

@@ -34,7 +34,7 @@
             <form id="JellyseerrRequesterConfigForm">
                 <div class="verticalSection">
                     <h2 class="sectionTitle">Jellyseerr Requester</h2>
-                    <p class="jsr-intro">Titles from Jellyseerr appear in Jellyfin search, next to your library, and users can request them from any Jellyfin app.</p>
+                    <p class="jsr-intro">Titles from Jellyseerr or Seerr appear in Jellyfin search, next to your library, and users can request them from any Jellyfin app. Jellyfin web also gets Trending and Popular rows on the home page.</p>
                     <ul class="jsr-steps">
                         <li>
                             <span class="material-icons search" aria-hidden="true"></span>
@@ -54,15 +54,15 @@
                 <div class="verticalSection">
                     <h3 class="sectionTitle">Connection</h3>
                     <div class="inputContainer">
-                        <input is="emby-input" type="url" id="JellyseerrUrl" label="Jellyseerr URL" placeholder="http://jellyseerr:5055" required />
-                        <div class="fieldDescription">The address the Jellyfin <b>server</b> uses to reach Jellyseerr.</div>
+                        <input is="emby-input" type="url" id="JellyseerrUrl" label="Jellyseerr or Seerr URL" placeholder="http://jellyseerr:5055" required />
+                        <div class="fieldDescription">The address the Jellyfin <b>server</b> uses to reach Jellyseerr or Seerr. Both work the same way.</div>
                     </div>
                     <div class="inputContainer">
                         <input is="emby-input" type="password" id="ApiKey" label="API key" autocomplete="off" required />
-                        <div class="fieldDescription">In Jellyseerr: Settings, General, API Key.</div>
+                        <div class="fieldDescription">In Jellyseerr or Seerr: Settings, General, API Key.</div>
                     </div>
                     <div class="inputContainer">
-                        <input is="emby-input" type="url" id="PublicJellyseerrUrl" label="Public Jellyseerr URL (optional)" placeholder="https://requests.example.com" />
+                        <input is="emby-input" type="url" id="PublicJellyseerrUrl" label="Public Jellyseerr or Seerr URL (optional)" placeholder="https://requests.example.com" />
                         <div class="fieldDescription">The address users' browsers use for "Open in Jellyseerr" links. Leave empty to use the URL above.</div>
                     </div>
                     <div class="jsr-test-row">
@@ -140,6 +140,26 @@
                         </label>
                         <div class="fieldDescription checkboxFieldDescription">Uses the File Transformation plugin when installed, otherwise patches index.html.</div>
                     </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="ShowDiscoverRows" />
+                            <span>Add Trending, Popular Movies and Popular TV Shows rows to the home page</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Rows come from Jellyseerr's Discover page and show below Jellyfin's own home sections. Titles that aren't in the library open their request page.</div>
+                    </div>
+                    <div id="discoverOptions" class="jsr-group">
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="DiscoverItemCount" min="1" max="60" label="Titles per row" />
+                            <div class="fieldDescription">Between 1 and 60.</div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DiscoverHideInLibrary" />
+                                <span>Leave out titles that are already in the library</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">When off, they're shown with a check mark and open the library item.</div>
+                        </div>
+                    </div>
                     <div id="restartNotice" class="jsr-notice" hidden>
                         <span class="material-icons restart_alt" aria-hidden="true"></span>
                         <span>Restart Jellyfin after saving for this change to take effect.</span>
@@ -158,7 +178,8 @@
             var pluginId = '980e2692-ff98-45ad-9eb2-0df748ceb82e';
             var page = document.querySelector('#JellyseerrRequesterConfigPage');
             var textFields = ['JellyseerrUrl', 'ApiKey', 'PublicJellyseerrUrl'];
-            var boolFields = ['InjectIntoSearch', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview', 'InjectClientScript', 'AllowUnlinkedUsers', 'Enable4K'];
+            var boolFields = ['InjectIntoSearch', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview', 'InjectClientScript', 'AllowUnlinkedUsers', 'Enable4K', 'ShowDiscoverRows', 'DiscoverHideInLibrary'];
+            var discoverOptionIds = ['DiscoverItemCount', 'DiscoverHideInLibrary'];
             var searchOptionIds = ['MaxResults', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview'];
             var savedClientScript = null;
             var testSeq = 0;
@@ -172,8 +193,19 @@
                 searchOptionIds.forEach(function (id) { el(id).disabled = !on; });
             }
 
+            function syncDiscoverOptions() {
+                var on = el('ShowDiscoverRows').checked;
+                el('discoverOptions').classList.toggle('jsr-off', !on);
+                discoverOptionIds.forEach(function (id) { el(id).disabled = !on; });
+            }
+
+            // The web script is loaded at startup when either web feature is on.
+            function needsClientScript() {
+                return el('InjectClientScript').checked || el('ShowDiscoverRows').checked;
+            }
+
             function syncRestartNotice() {
-                el('restartNotice').hidden = savedClientScript === null || el('InjectClientScript').checked === savedClientScript;
+                el('restartNotice').hidden = savedClientScript === null || needsClientScript() === savedClientScript;
             }
 
             function setStatus(kind, text) {
@@ -225,8 +257,10 @@
                     textFields.forEach(function (f) { el(f).value = config[f] || ''; });
                     boolFields.forEach(function (f) { el(f).checked = !!config[f]; });
                     el('MaxResults').value = config.MaxResults || 10;
-                    savedClientScript = !!config.InjectClientScript;
+                    el('DiscoverItemCount').value = config.DiscoverItemCount || 20;
+                    savedClientScript = !!config.InjectClientScript || !!config.ShowDiscoverRows;
                     syncSearchOptions();
+                    syncDiscoverOptions();
                     syncRestartNotice();
                     setStatus('idle', '');
                     Dashboard.hideLoadingMsg();
@@ -239,6 +273,10 @@
 
             el('InjectIntoSearch').addEventListener('change', syncSearchOptions);
             el('InjectClientScript').addEventListener('change', syncRestartNotice);
+            el('ShowDiscoverRows').addEventListener('change', function () {
+                syncDiscoverOptions();
+                syncRestartNotice();
+            });
             el('btnTestConnection').addEventListener('click', testConnection);
 
             el('JellyseerrRequesterConfigForm').addEventListener('submit', function (e) {
@@ -248,9 +286,11 @@
                     textFields.forEach(function (f) { config[f] = el(f).value.trim(); });
                     boolFields.forEach(function (f) { config[f] = el(f).checked; });
                     config.MaxResults = Math.min(50, Math.max(1, parseInt(el('MaxResults').value, 10) || 10));
+                    config.DiscoverItemCount = Math.min(60, Math.max(1, parseInt(el('DiscoverItemCount').value, 10) || 20));
                     ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                         el('MaxResults').value = config.MaxResults;
+                        el('DiscoverItemCount').value = config.DiscoverItemCount;
                     });
                 });
                 return false;

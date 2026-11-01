@@ -2,7 +2,8 @@
  * Jellyseerr Requester - Jellyfin web client integration.
  * Jellyseerr titles are added to search results by the server, so they work in every client
  * (requesting there = adding to favorites). In Jellyfin web, this script also adds a "Request"
- * button with a season picker to their detail pages.
+ * button with a season picker to their detail pages, and Trending / Popular rows to the home page.
+ * Works the same with Jellyseerr and Seerr (same API).
  */
 (function () {
     'use strict';
@@ -40,8 +41,18 @@
         config: null,
         configUserId: null,
         configPromise: null,
-        requestable: {}
+        requestable: {},
+        discover: null,
+        discoverAt: 0,
+        discoverPromise: null
     };
+
+    var DISCOVER_ROWS = [
+        { list: 'trending', title: 'Trending' },
+        { list: 'movies', title: 'Popular Movies' },
+        { list: 'tv', title: 'Popular TV Shows' }
+    ];
+    var DISCOVER_TTL = 5 * 60 * 1000;
 
     // ---------------------------------------------------------------- utils
 
@@ -204,6 +215,25 @@
             // Virtual items can't be played: hide play overlays on their cards and play/shuffle/played on their pages.
             '.card[data-id^="4a535252"] .cardOverlayButton,.card[data-id^="4a535252"] .cardOverlayFab-primary,.card[data-id^="4a535252"] .cardOverlayButton-hover{display:none!important;}',
             'body.jsr-virtual-details .mainDetailButtons .btnPlay,body.jsr-virtual-details .mainDetailButtons .btnReplay,body.jsr-virtual-details .mainDetailButtons .btnResume,body.jsr-virtual-details .mainDetailButtons .btnShuffle,body.jsr-virtual-details .mainDetailButtons .btnInstantMix,body.jsr-virtual-details .mainDetailButtons .btnPlaystate,body.jsr-virtual-details .mainDetailButtons .btnDownload{display:none!important;}',
+
+            // Home page rows. Card size and text come from Jellyfin's own card classes.
+            '.jsr-discover-head{display:flex;align-items:center;gap:.5em;}',
+            '.jsr-discover-head .sectionTitle{margin-right:auto;}',
+            '.jsr-discover-link{display:inline-flex;align-items:center;gap:.25em;font-size:.9em;opacity:.75;color:inherit;text-decoration:none;}',
+            '.jsr-discover-link:hover{opacity:1;text-decoration:underline;}',
+            '.jsr-discover-link .material-icons{font-size:1.1em;}',
+            '.jsr-discover-nav{display:inline-flex;align-items:center;justify-content:center;width:2.2em;height:2.2em;padding:0;border:0;border-radius:999px;background:none;color:inherit;cursor:pointer;opacity:.75;}',
+            '.jsr-discover-nav:hover{opacity:1;background:rgba(128,128,128,.2);}',
+            '@media (hover:none){.jsr-discover-nav{display:none;}}',
+            '.jsr-discover-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x proximity;scrollbar-width:none;padding-top:.6em;padding-bottom:.4em;}',
+            '.jsr-discover-track::-webkit-scrollbar{display:none;}',
+            '.jsr-discover-track>.card{flex:none;scroll-snap-align:start;color:inherit;text-decoration:none;}',
+            '.jsr-discover-track .cardImageContainer{overflow:hidden;}',
+            '.jsr-card-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}',
+            '.jsr-card-flag{position:absolute;top:.4em;right:.4em;display:flex;align-items:center;justify-content:center;width:1.8em;height:1.8em;border-radius:999px;background:#16a34a;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4);}',
+            '.jsr-card-flag .material-icons{font-size:1.2em;}',
+            '.jsr-discover-track>.card:focus-visible{outline:none;}',
+            '.jsr-discover-track>.card:focus-visible .cardScalable{outline:3px solid #a5b4fc;outline-offset:2px;border-radius:.2em;}',
 
             // Dialog.
             '.jsr-overlay{position:fixed;inset:0;z-index:100000;background:rgba(8,8,12,.72);display:flex;align-items:center;justify-content:center;padding:16px;}',
@@ -380,7 +410,7 @@
         btn.type = 'button';
         btn.setAttribute('data-key', JSON.stringify(virtualId));
         btn.innerHTML = icon('add') + '<span>Request</span>';
-        btn.title = 'Request with Jellyseerr';
+        btn.title = 'Request with ' + ((state.config && state.config.serverName) || 'Jellyseerr');
         if (container) {
             btn.className = 'button-flat detailButton';
             container.insertBefore(btn, container.firstChild);
@@ -404,6 +434,14 @@
     }
 
     function tick() {
+        if (apiClient() && isHomeRoute()) {
+            getConfig().then(function (config) {
+                if (config.configured && config.discoverRows) {
+                    ensureDiscoverRows(config);
+                }
+            }, function () {});
+        }
+
         var id = currentDetailsId();
         var virtualId = id && parseVirtualId(id);
         document.body.classList.toggle('jsr-virtual-details', !!virtualId);
@@ -412,7 +450,125 @@
             state.requestable = {};
             return;
         }
-        getConfig().then(function () { ensureButton(virtualId); }, function () {});
+        getConfig().then(function (config) {
+            if (config.requestButton) {
+                ensureButton(virtualId);
+            }
+        }, function () {});
+    }
+
+    // ---------------------------------------------------------------- home page rows
+
+    function isHomeRoute() {
+        var hash = window.location.hash || '';
+        return /^#!?\/home(\.html)?(\?|$)/i.test(hash) || hash === '' || hash === '#' || hash === '#/';
+    }
+
+    // The home tab's sections container (Jellyfin rebuilds it now and then, so this is checked on every tick).
+    function homeSectionsContainer() {
+        var nodes = document.querySelectorAll('#indexPage:not(.hide) .homeSectionsContainer, .homePage:not(.hide) .homeSectionsContainer, #homeTab .sections');
+        for (var i = nodes.length - 1; i >= 0; i--) {
+            if (nodes[i].getClientRects().length) {
+                return nodes[i];
+            }
+        }
+        return null;
+    }
+
+    function loadDiscover() {
+        if (state.discover && Date.now() - state.discoverAt < DISCOVER_TTL) {
+            return Promise.resolve(state.discover);
+        }
+        if (!state.discoverPromise) {
+            state.discoverPromise = Promise.all(DISCOVER_ROWS.map(function (row) {
+                return api('GET', 'Discover/' + row.list).then(function (res) {
+                    return (res && res.results) || [];
+                }, function (err) {
+                    console.warn('Jellyseerr Requester: could not load ' + row.list, err);
+                    return [];
+                });
+            })).then(function (lists) {
+                state.discover = lists;
+                state.discoverAt = Date.now();
+                state.discoverPromise = null;
+                return lists;
+            });
+        }
+        return state.discoverPromise;
+    }
+
+    function ensureDiscoverRows(config) {
+        var container = homeSectionsContainer();
+        if (!container || container.querySelector('.jsr-discover')) {
+            return;
+        }
+        loadDiscover().then(function (lists) {
+            // Re-check: the page may have changed or another tick may have added the rows meanwhile.
+            var target = homeSectionsContainer();
+            if (!target || target.querySelector('.jsr-discover') || !isHomeRoute()) {
+                return;
+            }
+            var wrap = document.createElement('div');
+            wrap.className = 'jsr-discover';
+            DISCOVER_ROWS.forEach(function (row, i) {
+                if (lists[i] && lists[i].length) {
+                    wrap.appendChild(discoverSection(row, lists[i], config));
+                }
+            });
+            if (wrap.childNodes.length) {
+                target.appendChild(wrap);
+            }
+        });
+    }
+
+    function discoverSection(row, items, config) {
+        var client = apiClient();
+        var serverId = client.serverId ? client.serverId() : '';
+        var serverName = config.serverName || 'Jellyseerr';
+        var section = document.createElement('div');
+        section.className = 'verticalSection jsr-discover-section';
+        section.innerHTML =
+            '<div class="sectionTitleContainer sectionTitleContainer-cards padded-left padded-right jsr-discover-head">' +
+            '<h2 class="sectionTitle sectionTitle-cards">' + escapeHtml(row.title) + '</h2>' +
+            (config.publicUrl
+                ? '<a class="jsr-discover-link" target="_blank" rel="noopener" href="' + escapeHtml(config.publicUrl + '/discover/' + row.list) + '">' +
+                  escapeHtml('Open in ' + serverName) + icon('open_in_new') + '</a>'
+                : '') +
+            '<button type="button" class="jsr-discover-nav" data-step="-1" aria-label="Scroll left">' + icon('chevron_left') + '</button>' +
+            '<button type="button" class="jsr-discover-nav" data-step="1" aria-label="Scroll right">' + icon('chevron_right') + '</button>' +
+            '</div>' +
+            '<div class="jsr-discover-track padded-left padded-right">' +
+            items.map(function (item) { return discoverCard(item, client, serverId, serverName); }).join('') +
+            '</div>';
+
+        var track = section.querySelector('.jsr-discover-track');
+        section.querySelectorAll('.jsr-discover-nav').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                track.scrollBy({ left: Number(btn.getAttribute('data-step')) * track.clientWidth * 0.8, behavior: 'smooth' });
+            });
+        });
+        return section;
+    }
+
+    function discoverCard(item, client, serverId, serverName) {
+        var params = { maxHeight: 450, quality: 90 };
+        if (item.imageTag) {
+            params.tag = item.imageTag;
+        }
+        var img = client.getUrl('Items/' + item.itemId + '/Images/Primary', params);
+        var href = '#/details?id=' + encodeURIComponent(item.itemId) + (serverId ? '&serverId=' + encodeURIComponent(serverId) : '');
+        var label = item.title + (item.year ? ' (' + item.year + ')' : '') + (item.inLibrary ? ', in your library' : ', from ' + serverName);
+        return '<a class="card overflowPortraitCard card-hoverable" href="' + escapeHtml(href) + '" title="' + escapeHtml(label) + '" aria-label="' + escapeHtml(label) + '">' +
+            '<div class="cardBox cardBox-bottompadded">' +
+            '<div class="cardScalable">' +
+            '<div class="cardPadder cardPadder-overflowPortrait"></div>' +
+            '<div class="cardImageContainer coveredImage cardContent">' +
+            '<img class="jsr-card-img" loading="lazy" decoding="async" alt="" src="' + escapeHtml(img) + '">' +
+            (item.inLibrary ? '<span class="jsr-card-flag" title="In your library">' + icon('check') + '</span>' : '') +
+            '</div></div>' +
+            '<div class="cardText cardTextCentered cardText-first"><bdi>' + escapeHtml(item.title) + '</bdi></div>' +
+            '<div class="cardText cardTextCentered cardText-secondary"><bdi>' + escapeHtml(item.year || '') + '</bdi></div>' +
+            '</div></a>';
     }
 
     // ---------------------------------------------------------------- request dialog
@@ -500,7 +656,7 @@
             '<div class="jsr-error" role="alert" hidden>' + icon('error_outline') + '<span class="jsr-error-text"></span></div>' +
             '</div>' +
             '<div class="jsr-footer">' +
-            (publicUrl ? '<a class="jsr-link" target="_blank" rel="noopener" href="' + escapeHtml(publicUrl) + '">Open in Jellyseerr' + icon('open_in_new') + '</a>' : '') +
+            (publicUrl ? '<a class="jsr-link" target="_blank" rel="noopener" href="' + escapeHtml(publicUrl) + '">' + escapeHtml('Open in ' + (config.serverName || 'Jellyseerr')) + icon('open_in_new') + '</a>' : '') +
             '<button type="button" class="jsr-btn jsr-btn-primary jsr-primary" hidden></button>' +
             '</div></div>';
 

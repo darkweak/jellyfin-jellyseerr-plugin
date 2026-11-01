@@ -24,6 +24,8 @@ public class JellyseerrClient
     private readonly ILogger<JellyseerrClient> _logger;
     private readonly SemaphoreSlim _userCacheLock = new(1, 1);
 
+    private static string _serverVersion = string.Empty;
+
     private List<JellyseerrUser> _userCache = new();
     private DateTime _userCacheExpiry = DateTime.MinValue;
     private string _userCacheKey = string.Empty;
@@ -48,6 +50,20 @@ public class JellyseerrClient
         !string.IsNullOrWhiteSpace(Config.JellyseerrUrl) && !string.IsNullOrWhiteSpace(Config.ApiKey);
 
     /// <summary>
+    /// Gets the product name of the configured server, as last seen by a connection test or user lookup.
+    /// </summary>
+    public static string ServerName => ServerNameFor(_serverVersion);
+
+    /// <summary>
+    /// Names the product from its version. Seerr, the successor of Jellyseerr and Overseerr, starts at 3.0;
+    /// its API is the same for everything this plugin uses.
+    /// </summary>
+    /// <param name="version">Version reported by /api/v1/status.</param>
+    /// <returns>"Seerr" or "Jellyseerr".</returns>
+    public static string ServerNameFor(string? version) =>
+        System.Version.TryParse((version ?? string.Empty).TrimStart('v').Split('-')[0], out var v) && v.Major >= 3 ? "Seerr" : "Jellyseerr";
+
+    /// <summary>
     /// Checks connectivity and credentials, returning the API key owner's display name and the server version.
     /// </summary>
     /// <param name="url">Jellyseerr URL.</param>
@@ -58,7 +74,13 @@ public class JellyseerrClient
     {
         var status = await SendAsync(HttpMethod.Get, url, apiKey, "/api/v1/status", null, null, cancellationToken).ConfigureAwait(false);
         var me = await SendAsync(HttpMethod.Get, url, apiKey, "/api/v1/auth/me", null, null, cancellationToken).ConfigureAwait(false);
-        return (status?["version"]?.GetValue<string>() ?? "unknown", DisplayName(me));
+        var version = status?["version"]?.GetValue<string>() ?? "unknown";
+        if (url.TrimEnd('/') == Config.JellyseerrUrl.TrimEnd('/'))
+        {
+            _serverVersion = version;
+        }
+
+        return (version, DisplayName(me));
     }
 
     /// <summary>
@@ -71,6 +93,19 @@ public class JellyseerrClient
     public Task<JsonNode?> SearchAsync(string query, int page, CancellationToken cancellationToken)
     {
         var path = string.Format(CultureInfo.InvariantCulture, "/api/v1/search?query={0}&page={1}", EncodeQuery(query), page);
+        return SendAsync(HttpMethod.Get, path, null, null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets a Jellyseerr discover list (same endpoints in Jellyseerr, Overseerr and Seerr).
+    /// </summary>
+    /// <param name="list">"trending", "movies" (popular movies) or "tv" (popular shows).</param>
+    /// <param name="page">Result page (1-based).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Raw discover response.</returns>
+    public Task<JsonNode?> DiscoverAsync(string list, int page, CancellationToken cancellationToken)
+    {
+        var path = string.Format(CultureInfo.InvariantCulture, "/api/v1/discover/{0}?page={1}", list, page);
         return SendAsync(HttpMethod.Get, path, null, null, cancellationToken);
     }
 
@@ -151,6 +186,16 @@ public class JellyseerrClient
             if (DateTime.UtcNow < _userCacheExpiry && _userCacheKey == cacheKey)
             {
                 return _userCache;
+            }
+
+            try
+            {
+                var status = await SendAsync(HttpMethod.Get, "/api/v1/status", null, null, cancellationToken).ConfigureAwait(false);
+                _serverVersion = status?["version"]?.GetValue<string>() ?? _serverVersion;
+            }
+            catch (JellyseerrException)
+            {
+                // Only used to name the product in the UI.
             }
 
             var users = new List<JellyseerrUser>();

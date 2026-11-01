@@ -24,6 +24,57 @@ public class ClientConfigDto
 
     /// <summary>Gets or sets a reason why the user cannot request.</summary>
     public string? Reason { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the Request button is added to detail pages.</summary>
+    public bool RequestButton { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the discover rows are added to the home page.</summary>
+    public bool DiscoverRows { get; set; }
+
+    /// <summary>Gets or sets the product name to show ("Jellyseerr" or "Seerr").</summary>
+    public string ServerName { get; set; } = "Jellyseerr";
+}
+
+/// <summary>
+/// A title in a home page discover row.
+/// </summary>
+public class DiscoverItemDto
+{
+    /// <summary>Gets or sets the Jellyfin item id: the library item when it's in the library, otherwise a virtual id.</summary>
+    public string ItemId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the title is in the Jellyfin library.</summary>
+    public bool InLibrary { get; set; }
+
+    /// <summary>Gets or sets the TMDB id.</summary>
+    public int TmdbId { get; set; }
+
+    /// <summary>Gets or sets the media type ("movie" or "tv").</summary>
+    public string MediaType { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the title.</summary>
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the release year.</summary>
+    public string? Year { get; set; }
+
+    /// <summary>Gets or sets the media status (see MediaStatus).</summary>
+    public int Status { get; set; } = 1;
+
+    /// <summary>Gets or sets the primary image tag (virtual items only).</summary>
+    public string? ImageTag { get; set; }
+}
+
+/// <summary>
+/// A home page discover row.
+/// </summary>
+public class DiscoverResponseDto
+{
+    /// <summary>Gets or sets the list ("trending", "movies" or "tv").</summary>
+    public string List { get; set; } = string.Empty;
+
+    /// <summary>Gets the titles.</summary>
+    public List<DiscoverItemDto> Results { get; } = new();
 }
 
 /// <summary>

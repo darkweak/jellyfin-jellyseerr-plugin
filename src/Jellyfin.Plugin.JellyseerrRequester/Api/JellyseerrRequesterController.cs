@@ -69,6 +69,8 @@ public class JellyseerrRequesterController : ControllerBase
         {
             Configured = JellyseerrClient.IsConfigured,
             Enable4K = config.Enable4K,
+            RequestButton = config.InjectClientScript,
+            DiscoverRows = config.ShowDiscoverRows,
             PublicUrl = (string.IsNullOrWhiteSpace(config.PublicJellyseerrUrl) ? config.JellyseerrUrl : config.PublicJellyseerrUrl).TrimEnd('/')
         };
 
@@ -89,6 +91,8 @@ public class JellyseerrRequesterController : ControllerBase
             dto.Reason = ex.Message;
         }
 
+        // Known once the user lookup above has talked to the server.
+        dto.ServerName = JellyseerrClient.ServerName;
         return dto;
     }
 
@@ -103,6 +107,16 @@ public class JellyseerrRequesterController : ControllerBase
     [Authorize]
     public Task<ActionResult<SearchItemDto>> GetTitle([FromRoute] string mediaType, [FromRoute] int tmdbId, CancellationToken cancellationToken)
         => Run(async () => (await _service.GetTitleAsync(ToVirtualId(mediaType, tmdbId), cancellationToken).ConfigureAwait(false)).Item);
+
+    /// <summary>
+    /// Gets a home page row: trending titles, popular movies or popular shows.
+    /// </summary>
+    /// <param name="list">"trending", "movies" or "tv".</param>
+    /// <returns>The row.</returns>
+    [HttpGet("Discover/{list}")]
+    [Authorize]
+    public Task<ActionResult<DiscoverResponseDto>> GetDiscover([FromRoute] string list)
+        => Run(() => _service.DiscoverAsync(list));
 
     /// <summary>
     /// Gets TV seasons and their status for the season picker.
@@ -141,7 +155,7 @@ public class JellyseerrRequesterController : ControllerBase
         => Run(async () =>
         {
             var (version, user) = await _client.TestConnectionAsync(body.Url, body.ApiKey, cancellationToken).ConfigureAwait(false);
-            return new MessageDto { Message = $"Connected to Jellyseerr {version} as {user}." };
+            return new MessageDto { Message = $"Connected to {JellyseerrClient.ServerNameFor(version)} {version} as {user}." };
         });
 
     private static VirtualId ToVirtualId(string mediaType, int tmdbId) => mediaType switch

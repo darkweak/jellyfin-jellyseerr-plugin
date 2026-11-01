@@ -6,7 +6,7 @@
 #   also writes dist/manifest.json so you can add the folder as a Jellyfin plugin repository.
 set -euo pipefail
 
-VERSION="1.1.0.0"
+VERSION="1.2.0.0"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PROJ_DIR="src/Jellyfin.Plugin.JellyseerrRequester"
 DIST="$ROOT/dist"

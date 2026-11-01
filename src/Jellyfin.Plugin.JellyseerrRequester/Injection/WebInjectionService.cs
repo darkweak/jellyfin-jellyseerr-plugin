@@ -41,7 +41,7 @@ public partial class WebInjectionService : IHostedService
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        var enabled = Plugin.Instance?.Configuration.InjectClientScript ?? true;
+        var enabled = Plugin.Instance?.Configuration.NeedsClientScript() ?? true;
 
         if (enabled && TryRegisterFileTransformation())
         {
@@ -172,7 +172,7 @@ public static class FileTransformationCallback
     /// <returns>Transformed contents.</returns>
     public static string TransformIndex(PatchRequestPayload payload)
     {
-        var enabled = Plugin.Instance?.Configuration.InjectClientScript ?? true;
+        var enabled = Plugin.Instance?.Configuration.NeedsClientScript() ?? true;
         return WebInjectionService.Transform(payload.Contents ?? string.Empty, enabled);
     }
 }

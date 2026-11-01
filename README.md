@@ -6,7 +6,7 @@
 
 ![Jellyfin 12.x](https://img.shields.io/badge/Jellyfin-12.x-00a4dc?style=flat-square&logo=jellyfin&logoColor=white)
 ![Jellyfin 10.11.x](https://img.shields.io/badge/Jellyfin-10.11.x-00a4dc?style=flat-square&logo=jellyfin&logoColor=white)
-![Version 1.1.0](https://img.shields.io/badge/version-1.1.0-4f46e5?style=flat-square)
+![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-4f46e5?style=flat-square)
 ![Works with Jellyseerr, Overseerr and Seerr](https://img.shields.io/badge/works%20with-Jellyseerr%20%C2%B7%20Overseerr%20%C2%B7%20Seerr-4f46e5?style=flat-square)
 
 [What users get](#what-users-get) ·
@@ -60,6 +60,12 @@ Posters carry a badge that updates as Jellyseerr does its job:
 | `REQUEST MORE` | Some seasons are missing |
 | `AVAILABLE` | Ready to watch (shown per season) |
 
+### 4. Trending and popular on the home page
+Jellyfin web's home page gets three more rows, below Jellyfin's own sections: **Trending**, **Popular Movies** and
+**Popular TV Shows**, the same lists as Jellyseerr's *Discover* page. Titles that aren't in the library carry
+their status badge and open their request page. Titles already in the library get a check mark and open the
+library item, or can be left out. Each row links to the full list in Jellyseerr.
+
 ### In Jellyfin web
 A **Request** button replaces Play on these titles. It opens a dialog where missing seasons are already selected
 (or just the season you're looking at), with an optional **Standard / 4K** choice. Play and Shuffle are
@@ -76,8 +82,8 @@ hidden, since there's nothing to play yet.
 
    | Jellyfin | Zip |
    |---|---|
-   | 12.x | `jellyseerr-requester_1.1.0.0_jf12.zip` |
-   | 10.11.x | `jellyseerr-requester_1.1.0.0_jf10.11.zip` |
+   | 12.x | `jellyseerr-requester_1.2.0.0_jf12.zip` |
+   | 10.11.x | `jellyseerr-requester_1.2.0.0_jf10.11.zip` |
 
 3. **Stop Jellyfin.** Extract `Jellyfin.Plugin.JellyseerrRequester.dll` into
    `<jellyfin config>/plugins/JellyseerrRequester/`, replacing any older copy. In Docker that's usually
@@ -111,9 +117,14 @@ Use **Test connection** again after changing the URL or key.
 
 | Setting | What to enter |
 |---|---|
-| Jellyseerr URL | The address the **Jellyfin server** uses to reach Jellyseerr, e.g. `http://jellyseerr:5055` |
+| Jellyseerr or Seerr URL | The address the **Jellyfin server** uses to reach Jellyseerr, e.g. `http://jellyseerr:5055` |
 | API key | In Jellyseerr: *Settings → General → API Key* |
-| Public Jellyseerr URL | Optional. The address browsers use for "Open in Jellyseerr" links |
+| Public Jellyseerr or Seerr URL | Optional. The address browsers use for "Open in Jellyseerr" links |
+
+> [!TIP]
+> **Seerr** (the merged successor of Jellyseerr and Overseerr, v3 and later) works the same way: point the plugin at it
+> and use its API key. Its API is the same for everything this plugin does. **Test connection** says which one it
+> found, and links in Jellyfin web name it.
 
 **Search results**
 
@@ -132,6 +143,9 @@ Use **Test connection** again after changing the URL or key.
 | Let users without a Jellyseerr account request | Off. When on, unlinked users request as the API key owner |
 | Offer 4K requests | Off. Adds the Standard / 4K choice; needs a 4K server in Jellyseerr |
 | Request button with season picker | On. Web only; restart Jellyfin after changing it |
+| Trending and Popular rows on the home page | On. Web only; restart Jellyfin after turning it on or off |
+| Titles per row | 20 |
+| Leave out titles that are already in the library | Off. When off, they show with a check mark and open the library item |
 
 ### Linking users
 Jellyfin users are matched to Jellyseerr users by **Jellyfin user ID**, then by **username**. Anyone imported with
@@ -144,7 +158,7 @@ Unlinked users still see the titles. The overview tells them to ask an admin, an
 
 | Client | Titles in search | How to request |
 |---|:---:|---|
-| Jellyfin web, desktop apps | ✅ | Heart, or the **Request** button and season picker |
+| Jellyfin web, desktop apps | ✅ + home page rows | Heart, or the **Request** button and season picker |
 | Swiftfin (Apple TV, iOS) | ✅ | Heart |
 | Android TV, Android, Jellyfin iOS app | ✅ | Heart |
 | Infuse | ❌ | Infuse searches its own copy of your library instead of asking the server |
@@ -183,6 +197,16 @@ Import the user in Jellyseerr (*Users → Import Jellyfin Users*), or turn on
 </details>
 
 <details>
+<summary><b>No Trending or Popular rows on the home page</b></summary>
+<br>
+
+The rows need *Trending and Popular rows on the home page* turned on and a Jellyfin restart, then a page reload
+that bypasses the browser cache. They're web only, and appear below Jellyfin's own home sections. The lists are
+cached for 10 minutes on the server.
+
+</details>
+
+<details>
 <summary><b>No Request button in Jellyfin web</b></summary>
 <br>
 
@@ -206,6 +230,9 @@ flowchart LR
   later call for those ids: details, images, seasons, user data and favorites. Other endpoints (similar items,
   theme media, playback info…) get empty answers instead of errors. Search results are cached for 2 minutes,
   and titles already in the library (matched by TMDB id) are left out.
+- **Home page rows** come from Jellyseerr's `/api/v1/discover/trending`, `/discover/movies` and `/discover/tv`
+  (the same in Seerr), are cached for 10 minutes, and are drawn by the web script with Jellyfin's own card styles.
+  Cards use the same virtual ids as search results, so they open the same detail page and Request dialog.
 - **Posters** come from TMDB. The badge is drawn with SkiaSharp, which Jellyfin already ships.
 - **Web script** (optional) is loaded through the
   [File Transformation](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation) plugin when it's
@@ -241,7 +268,7 @@ src/Jellyfin.Plugin.JellyseerrRequester/
   Virtual/VirtualId.cs                     self-describing virtual item ids
   Api/                                     endpoints used by the web script and the settings page
   Injection/WebInjectionService.cs         web script injection
-  Web/jellyseerr-requester.js              web Request button and season picker
+  Web/jellyseerr-requester.js              web Request button, season picker and home page rows
 docs/                                      README images
 ```
 
