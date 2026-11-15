@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Jellyfin.Plugin.JellyseerrRequester.Api;
 
@@ -33,6 +35,48 @@ public class ClientConfigDto
 
     /// <summary>Gets or sets the product name to show ("Jellyseerr" or "Seerr").</summary>
     public string ServerName { get; set; } = "Jellyseerr";
+
+    /// <summary>Gets or sets a value indicating whether the current user can remove downloads.</summary>
+    public bool CanRemove { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the Downloads row is added to the home page.</summary>
+    public bool DownloadsRow { get; set; }
+}
+
+/// <summary>
+/// Download progress of a requested title, as Radarr/Sonarr report it through Jellyseerr.
+/// </summary>
+public class DownloadDto
+{
+    /// <summary>Gets or sets the state: downloading, queued, paused, importing, stalled, waiting or missing.</summary>
+    public string State { get; set; } = "downloading";
+
+    /// <summary>Gets or sets a value indicating whether the download looks stuck.</summary>
+    public bool Stale { get; set; }
+
+    /// <summary>Gets or sets the progress, 0 to 1, when known.</summary>
+    public double? Progress { get; set; }
+
+    /// <summary>Gets or sets the total size in bytes.</summary>
+    public long Size { get; set; }
+
+    /// <summary>Gets or sets the bytes left.</summary>
+    public long SizeLeft { get; set; }
+
+    /// <summary>Gets or sets the number of items in the download queue.</summary>
+    public int Items { get; set; }
+
+    /// <summary>Gets or sets the estimated completion time.</summary>
+    public DateTime? EstimatedCompletion { get; set; }
+
+    /// <summary>Gets or sets when the request was approved (or the media last changed).</summary>
+    public DateTime? Since { get; set; }
+
+    /// <summary>Gets or sets a short label, e.g. "45% · 1h 20m" or "Stalled".</summary>
+    public string Short { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a one-sentence description.</summary>
+    public string Summary { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -63,6 +107,15 @@ public class DiscoverItemDto
 
     /// <summary>Gets or sets the primary image tag (virtual items only).</summary>
     public string? ImageTag { get; set; }
+
+    /// <summary>Gets or sets the TMDB poster path.</summary>
+    public string? PosterPath { get; set; }
+
+    /// <summary>Gets or sets the download progress (Downloads row only).</summary>
+    public DownloadDto? Download { get; set; }
+
+    /// <summary>Gets or sets who requested it (Downloads row only).</summary>
+    public string? RequestedBy { get; set; }
 }
 
 /// <summary>
@@ -123,6 +176,16 @@ public class SearchItemDto
 
     /// <summary>Gets or sets the 4K media status.</summary>
     public int Status4K { get; set; } = 1;
+
+    /// <summary>Gets or sets the Jellyseerr media id, once the title has been requested.</summary>
+    public int? MediaId { get; set; }
+
+    /// <summary>Gets or sets the download progress while the title is being downloaded.</summary>
+    public DownloadDto? Download { get; set; }
+
+    /// <summary>Gets or sets the ids of open (pending or approved) standard-quality requests.</summary>
+    [JsonIgnore]
+    public List<int> OpenRequestIds { get; set; } = new();
 }
 
 /// <summary>
@@ -201,6 +264,18 @@ public class CreateRequestDto
 
     /// <summary>Gets or sets a value indicating whether to request 4K.</summary>
     public bool Is4K { get; set; }
+}
+
+/// <summary>
+/// Request body for removing a download.
+/// </summary>
+public class RemoveDto
+{
+    /// <summary>Gets or sets the media type ("movie" or "tv").</summary>
+    public string MediaType { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the TMDB id.</summary>
+    public int TmdbId { get; set; }
 }
 
 /// <summary>

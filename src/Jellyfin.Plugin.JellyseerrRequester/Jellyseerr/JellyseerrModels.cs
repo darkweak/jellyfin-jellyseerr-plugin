@@ -45,6 +45,14 @@ public class JellyseerrUser
 
     /// <summary>Gets or sets the linked Jellyfin user name.</summary>
     public string? JellyfinUsername { get; set; }
+
+    /// <summary>Gets or sets the Jellyseerr permission bits.</summary>
+    public int Permissions { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether the user may manage requests (Jellyseerr's Admin = 2 or Manage Requests = 16).
+    /// </summary>
+    public bool CanManageRequests => (Permissions & (2 | 16)) != 0;
 }
 
 /// <summary>

@@ -202,7 +202,7 @@ public class VirtualItemFilter : IAsyncActionFilter
             || (NormalizeTitle(l.Name) == NormalizeTitle(item.Title)
                 && (l.ProductionYear is null || item.Year is null || l.ProductionYear.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) == item.Year)));
 
-        var max = Math.Clamp(Config.MaxResults, 1, 50);
+        var max = Math.Clamp(Config.MaxResults, 1, 100);
         var results = search.Result;
         return results.Where(i => i.MediaType == "movie" && movies && !InLibrary(i)).Take(max)
             .Concat(results.Where(i => i.MediaType == "tv" && series && !InLibrary(i)).Take(max))
@@ -291,6 +291,8 @@ public class VirtualItemFilter : IAsyncActionFilter
 
             case "UserLibrary.UnmarkFavoriteItem":
             case "UserLibrary.UnmarkFavoriteItemLegacy":
+                return await UnfavoriteAsync(context, id, ct).ConfigureAwait(false);
+
             case "Items.GetItemUserData":
             case "Items.GetItemUserDataLegacy":
                 // A request can't be cancelled from here; report the actual state.
@@ -366,7 +368,8 @@ public class VirtualItemFilter : IAsyncActionFilter
             return _service.ToSeasonDto(title.Item, season, reason);
         }
 
-        return _service.ToDto(title.Item, title.Tv, reason);
+        var canRemove = title.Item.Download?.Stale == true && await _service.CanRemoveAsync(user, ct).ConfigureAwait(false);
+        return _service.ToDto(title.Item, title.Tv, reason, canRemove);
     }
 
     private async Task<QueryResult<BaseItemDto>> GetSeasonsAsync(VirtualId id, System.Security.Claims.ClaimsPrincipal user, CancellationToken ct)
@@ -402,6 +405,33 @@ public class VirtualItemFilter : IAsyncActionFilter
         return new OkObjectResult(data);
     }
 
+    /// <summary>
+    /// Un-favoriting a title whose download is stalled removes it (for users allowed to), so it can be requested
+    /// again; that's the only way to do it from apps other than Jellyfin web. Otherwise it reports the actual state:
+    /// a request can't be cancelled this way.
+    /// </summary>
+    private async Task<IActionResult> UnfavoriteAsync(ActionExecutingContext context, VirtualId id, CancellationToken ct)
+    {
+        var user = context.HttpContext.User;
+        if (id.Kind != VirtualKind.Season)
+        {
+            var title = await _service.GetTitleAsync(id, ct).ConfigureAwait(false);
+            if (title.Item.Download?.Stale == true && await _service.CanRemoveAsync(user, ct).ConfigureAwait(false))
+            {
+                try
+                {
+                    await _service.RemoveAsync(user, id.MediaType, id.TmdbId, ct).ConfigureAwait(false);
+                }
+                catch (JellyseerrException ex)
+                {
+                    _logger.LogWarning("Jellyseerr Requester: could not remove stalled download {Id}: {Message}", id, ex.Message);
+                }
+            }
+        }
+
+        return new OkObjectResult(await GetUserDataAsync(id, ct).ConfigureAwait(false));
+    }
+
     private async Task<IActionResult> GetImageAsync(ActionExecutingContext context, VirtualId id, CancellationToken ct)
     {
         var imageType = context.ActionArguments.TryGetValue("imageType", out var it) && it is ImageType t ? t : ImageType.Primary;
@@ -425,7 +455,7 @@ public class VirtualItemFilter : IAsyncActionFilter
         if (imageType == ImageType.Primary)
         {
             var season = id.Kind == VirtualKind.Season ? title.Tv?.Seasons.FirstOrDefault(s => s.SeasonNumber == id.Season) : null;
-            var status = season?.Status ?? RequesterService.EffectiveStatus(title.Item, title.Tv);
+            var status = season?.Status ?? RequesterService.BadgeStatus(title.Item, title.Tv);
             data = await _posters.GetPosterAsync(
                 season?.PosterPath ?? title.Item.PosterPath,
                 season?.Name ?? title.Item.Title,

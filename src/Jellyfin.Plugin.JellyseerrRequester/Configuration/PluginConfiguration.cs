@@ -32,7 +32,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>
     /// Gets or sets the maximum number of Jellyseerr titles added per search, per type (movies, shows).
     /// </summary>
-    public int MaxResults { get; set; } = 10;
+    public int MaxResults { get; set; } = 20;
 
     /// <summary>
     /// Gets or sets a value indicating whether titles already fully available are left out.
@@ -83,8 +83,20 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool DiscoverHideInLibrary { get; set; }
 
     /// <summary>
+    /// Gets or sets the number of hours after which a download without progress, or a request with nothing
+    /// in the download queue, is shown as stalled.
+    /// </summary>
+    public int StaleAfterHours { get; set; } = 24;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a Downloads row (requests being downloaded, with their progress)
+    /// is added to the Jellyfin web home page.
+    /// </summary>
+    public bool ShowDownloadsRow { get; set; } = true;
+
+    /// <summary>
     /// Whether the web client script is needed (Request button or home page rows).
     /// </summary>
     /// <returns>True when the script should be injected.</returns>
-    public bool NeedsClientScript() => InjectClientScript || ShowDiscoverRows;
+    public bool NeedsClientScript() => InjectClientScript || ShowDiscoverRows || ShowDownloadsRow;
 }

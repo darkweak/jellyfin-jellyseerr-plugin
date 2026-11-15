@@ -16,6 +16,11 @@ namespace Jellyfin.Plugin.JellyseerrRequester.Virtual;
 /// </summary>
 public class PosterRenderer
 {
+    /// <summary>
+    /// Badge code for a stalled download (not a Jellyseerr media status).
+    /// </summary>
+    public const int StalledBadge = 100;
+
     private const string TmdbImageBase = "https://image.tmdb.org/t/p/";
     private const int MaxCacheEntries = 300;
 
@@ -183,6 +188,13 @@ public class PosterRenderer
                     path.LineTo(icon.MidX, icon.Bottom);
                     path.LineTo(icon.Right - (iconSize * 0.15f), icon.MidY + (iconSize * 0.1f));
                     break;
+                case StalledBadge:
+                    // Exclamation mark.
+                    path.MoveTo(icon.MidX, icon.Top);
+                    path.LineTo(icon.MidX, icon.Top + (iconSize * 0.62f));
+                    path.MoveTo(icon.MidX, icon.Bottom - (iconSize * 0.05f));
+                    path.LineTo(icon.MidX, icon.Bottom);
+                    break;
                 case (int)MediaStatus.Available:
                     path.MoveTo(icon.Left, icon.MidY);
                     path.LineTo(icon.Left + (iconSize * 0.38f), icon.Bottom - (iconSize * 0.12f));
@@ -284,6 +296,7 @@ public class PosterRenderer
         (int)MediaStatus.Processing => ("DOWNLOADING", new SKColor(0x25, 0x63, 0xeb)),
         (int)MediaStatus.PartiallyAvailable => ("REQUEST MORE", new SKColor(0x63, 0x66, 0xf1)),
         (int)MediaStatus.Available => ("AVAILABLE", new SKColor(0x16, 0xa3, 0x4a)),
+        StalledBadge => ("STALLED", new SKColor(0xdc, 0x26, 0x26)),
         _ => null
     };
 

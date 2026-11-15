@@ -157,6 +157,55 @@ public class JellyseerrClient
     }
 
     /// <summary>
+    /// Lists requests, newest change first. Jellyseerr only returns the acting user's own requests unless
+    /// they may view or manage everyone's.
+    /// </summary>
+    /// <param name="filter">Jellyseerr filter, e.g. "processing" (approved, not available yet).</param>
+    /// <param name="take">Page size.</param>
+    /// <param name="actAsUserId">Jellyseerr user to act as, or null for the API key owner.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Raw request list.</returns>
+    public Task<JsonNode?> GetRequestsAsync(string filter, int take, int? actAsUserId, CancellationToken cancellationToken)
+    {
+        var path = string.Format(CultureInfo.InvariantCulture, "/api/v1/request?take={0}&skip=0&filter={1}&sort=modified", take, Uri.EscapeDataString(filter));
+        return SendAsync(HttpMethod.Get, path, null, actAsUserId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Removes a title from Radarr or Sonarr (Jellyseerr's "Remove from *arr"), deleting its files there.
+    /// </summary>
+    /// <param name="mediaId">Jellyseerr media id (not the TMDB id).</param>
+    /// <param name="is4K">Whether to remove it from the 4K server.</param>
+    /// <param name="actAsUserId">Jellyseerr user to act as, or null for the API key owner.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task.</returns>
+    public Task DeleteMediaFileAsync(int mediaId, bool is4K, int? actAsUserId, CancellationToken cancellationToken)
+    {
+        var path = string.Format(CultureInfo.InvariantCulture, "/api/v1/media/{0}/file?is4k={1}", mediaId, is4K ? "true" : "false");
+        return SendAsync(HttpMethod.Delete, path, null, actAsUserId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Deletes a title's media record and its requests from Jellyseerr ("Clear data"), so it can be requested again.
+    /// </summary>
+    /// <param name="mediaId">Jellyseerr media id (not the TMDB id).</param>
+    /// <param name="actAsUserId">Jellyseerr user to act as, or null for the API key owner.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task.</returns>
+    public Task DeleteMediaAsync(int mediaId, int? actAsUserId, CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Delete, "/api/v1/media/" + mediaId.ToString(CultureInfo.InvariantCulture), null, actAsUserId, cancellationToken);
+
+    /// <summary>
+    /// Deletes a request.
+    /// </summary>
+    /// <param name="requestId">Request id.</param>
+    /// <param name="actAsUserId">Jellyseerr user to act as, or null for the API key owner.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task.</returns>
+    public Task DeleteRequestAsync(int requestId, int? actAsUserId, CancellationToken cancellationToken)
+        => SendAsync(HttpMethod.Delete, "/api/v1/request/" + requestId.ToString(CultureInfo.InvariantCulture), null, actAsUserId, cancellationToken);
+
+    /// <summary>
     /// Finds the Jellyseerr user linked to a Jellyfin user.
     /// </summary>
     /// <param name="jellyfinUserId">Jellyfin user id.</param>
@@ -222,7 +271,8 @@ public class JellyseerrClient
                         Id = u["id"]?.GetValue<int>() ?? 0,
                         DisplayName = DisplayName(u),
                         JellyfinUserId = u["jellyfinUserId"]?.GetValue<string>(),
-                        JellyfinUsername = u["jellyfinUsername"]?.GetValue<string>()
+                        JellyfinUsername = u["jellyfinUsername"]?.GetValue<string>(),
+                        Permissions = u["permissions"] is JsonValue p && p.TryGetValue<int>(out var bits) ? bits : 0
                     });
                 }
 

@@ -31,7 +31,7 @@ public static class JellyseerrMapper
             ? node["runtime"]?.GetValue<int>()
             : node["episodeRunTime"]?.AsArray().Select(r => r?.GetValue<int>()).FirstOrDefault(r => r > 0);
 
-        return new SearchItemDto
+        var item = new SearchItemDto
         {
             Id = node["id"]?.GetValue<int>() ?? 0,
             MediaType = mediaType,
@@ -46,8 +46,20 @@ public static class JellyseerrMapper
             RuntimeMinutes = runtime,
             Genres = node["genres"]?.AsArray().Select(g => g?["name"]?.GetValue<string>()).OfType<string>().ToArray(),
             Status = mediaInfo?["status"]?.GetValue<int>() ?? (int)MediaStatus.Unknown,
-            Status4K = mediaInfo?["status4k"]?.GetValue<int>() ?? (int)MediaStatus.Unknown
+            Status4K = mediaInfo?["status4k"]?.GetValue<int>() ?? (int)MediaStatus.Unknown,
+            MediaId = mediaInfo?["id"]?.GetValue<int>()
         };
+
+        foreach (var r in mediaInfo?["requests"]?.AsArray() ?? new JsonArray())
+        {
+            if (r?["status"]?.GetValue<int>() is 1 or 2 && r["is4k"]?.GetValue<bool>() != true && r["id"]?.GetValue<int>() is { } requestId)
+            {
+                item.OpenRequestIds.Add(requestId);
+            }
+        }
+
+        item.Download = DownloadAnalyzer.Analyze(mediaInfo, false, item.ReleaseDate);
+        return item;
     }
 
     /// <summary>
