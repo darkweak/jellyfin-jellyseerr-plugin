@@ -30,9 +30,16 @@ public class RequesterService
     // Jellyfin's internal claim type for the user id (Jellyfin.Api.Constants.InternalClaimTypes.UserId).
     private const string UserIdClaim = "Jellyfin-UserId";
 
+    // Jellyfin's role for administrators (Jellyfin.Data.Enums.UserRoles / Jellyfin.Api.Constants.UserRoles).
+    private const string AdministratorRole = "Administrator";
+
+    // Jellyseerr returns 20 search results per page, movies, shows and people mixed.
+    private const int MaxSearchPages = 5;
+
     private static readonly TimeSpan SearchCacheDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan TitleCacheDuration = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan DiscoverCacheDuration = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DownloadsCacheDuration = TimeSpan.FromSeconds(45);
 
     private readonly JellyseerrClient _client;
     private readonly IServerApplicationHost _host;
@@ -42,6 +49,7 @@ public class RequesterService
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<List<SearchItemDto>> Task)> _searchCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<VirtualId, CachedTitle> _titles = new();
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<DiscoverResponseDto> Task)> _discoverCache = new();
+    private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<DiscoverResponseDto> Task)> _downloadsCache = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RequesterService"/> class.
@@ -94,13 +102,37 @@ public class RequesterService
     private async Task<List<SearchItemDto>> SearchUncachedAsync(string query)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var raw = await _client.SearchAsync(query, 1, cts.Token).ConfigureAwait(false);
+        var first = await _client.SearchAsync(query, 1, cts.Token).ConfigureAwait(false);
+
+        // Enough pages for the configured number of movies and of shows; later pages are fetched together.
+        var wanted = Math.Clamp(((Math.Clamp(Config.MaxResults, 1, 100) + 9) / 10) + 1, 1, MaxSearchPages);
+        var totalPages = first?["totalPages"]?.GetValue<int>() ?? 1;
+        var pages = new List<System.Text.Json.Nodes.JsonNode?> { first };
+        if (totalPages > 1 && wanted > 1)
+        {
+            var more = Enumerable.Range(2, Math.Min(wanted, totalPages) - 1).Select(async page =>
+            {
+                try
+                {
+                    return await _client.SearchAsync(query, page, cts.Token).ConfigureAwait(false);
+                }
+                catch (JellyseerrException ex)
+                {
+                    _logger.LogDebug("Jellyseerr Requester: search page {Page} failed: {Message}", page, ex.Message);
+                    return null;
+                }
+            });
+            pages.AddRange(await Task.WhenAll(more).ConfigureAwait(false));
+        }
+
         var hideAvailable = Config.HideAvailable;
         var results = new List<SearchItemDto>();
-        foreach (var node in raw?["results"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray())
+        var seen = new HashSet<VirtualId>();
+        foreach (var node in pages.SelectMany(p => p?["results"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray()))
         {
             var item = JellyseerrMapper.ToSearchItem(node);
             if (item is null || item.Id <= 0
+                || !seen.Add(ToVirtualId(item))
                 || item.Status == (int)MediaStatus.Blacklisted
                 || (hideAvailable && item.Status == (int)MediaStatus.Available)
                 || FindInLibrary(item) is not null)
@@ -223,7 +255,8 @@ public class RequesterService
                     Title = item.Title,
                     Year = item.Year,
                     Status = item.Status,
-                    ImageTag = libraryId is null ? ImageTag(item.PosterPath, item.Status) : null
+                    ImageTag = libraryId is null ? ImageTag(item.PosterPath, BadgeStatus(item, null)) : null,
+                    PosterPath = item.PosterPath
                 });
                 if (dto.Results.Count >= max)
                 {
@@ -267,7 +300,12 @@ public class RequesterService
         {
             var raw = await _client.GetTvAsync(id.TmdbId, cancellationToken).ConfigureAwait(false);
             var item = JellyseerrMapper.ToSearchItem(raw, "tv") ?? throw new JellyseerrException(404, "Series not found.");
-            title = new CachedTitle(item, JellyseerrMapper.BuildTvDetails(id.TmdbId, raw), true);
+            var tv = JellyseerrMapper.BuildTvDetails(id.TmdbId, raw);
+
+            // What's awaited is the latest season being downloaded, not the show's first episode.
+            var awaited = tv.Seasons.Where(s => s.Status == (int)MediaStatus.Processing).Select(s => s.AirDate).LastOrDefault(d => d is not null);
+            item.Download = DownloadAnalyzer.Analyze(raw?["mediaInfo"], false, awaited ?? item.ReleaseDate);
+            title = new CachedTitle(item, tv, true);
         }
 
         _titles[id] = title;
@@ -402,6 +440,243 @@ public class RequesterService
         return await RequestAsync(principal, body, cancellationToken).ConfigureAwait(false);
     }
 
+    // ------------------------------------------------------------------ downloads
+
+    /// <summary>
+    /// Resolves who acts in Jellyseerr for download management. Jellyfin administrators act as the API key owner;
+    /// other users as their linked Jellyseerr account, with that account's permissions.
+    /// </summary>
+    /// <param name="principal">Current user.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The Jellyseerr user id to act as (null for the API key owner) and whether they may remove downloads.</returns>
+    public async Task<(int? UserId, bool CanManage)> ResolveActorAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        if (principal.IsInRole(AdministratorRole))
+        {
+            return (null, true);
+        }
+
+        if (!Guid.TryParse(principal.FindFirstValue(UserIdClaim), out var userId))
+        {
+            throw new JellyseerrException(StatusCodes.Status403Forbidden, "Could not identify the Jellyfin user.");
+        }
+
+        var linked = await _client.FindLinkedUserAsync(userId, principal.Identity?.Name, cancellationToken).ConfigureAwait(false)
+            ?? throw new JellyseerrException(StatusCodes.Status403Forbidden, "Your Jellyfin account is not linked to a Jellyseerr account.");
+        return (linked.Id, linked.CanManageRequests);
+    }
+
+    /// <summary>
+    /// Whether the user may remove downloads.
+    /// </summary>
+    /// <param name="principal">Current user.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when allowed.</returns>
+    public async Task<bool> CanRemoveAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await ResolveActorAsync(principal, cancellationToken).ConfigureAwait(false)).CanManage;
+        }
+        catch (JellyseerrException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes a title that is being downloaded, so it stops and can be requested again.
+    /// A title with nothing available yet is removed from Radarr/Sonarr (with its partial files) and cleared in
+    /// Jellyseerr. A show with some seasons already available only has its open requests cancelled, so its files stay.
+    /// </summary>
+    /// <param name="principal">Current user.</param>
+    /// <param name="mediaType">"movie" or "tv".</param>
+    /// <param name="tmdbId">TMDB id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result message.</returns>
+    public async Task<MessageDto> RemoveAsync(ClaimsPrincipal principal, string mediaType, int tmdbId, CancellationToken cancellationToken)
+    {
+        if (mediaType is not ("movie" or "tv") || tmdbId <= 0)
+        {
+            throw new JellyseerrException(StatusCodes.Status400BadRequest, "Invalid media type or id.");
+        }
+
+        var (actAs, canManage) = await ResolveActorAsync(principal, cancellationToken).ConfigureAwait(false);
+        if (!canManage)
+        {
+            throw new JellyseerrException(StatusCodes.Status403Forbidden, "Removing downloads needs the Manage Requests permission in Jellyseerr. Ask your administrator.");
+        }
+
+        var id = new VirtualId(mediaType == "movie" ? VirtualKind.Movie : VirtualKind.Series, tmdbId);
+        _titles.TryRemove(id, out _);
+        var title = await GetTitleAsync(id, cancellationToken).ConfigureAwait(false);
+        var item = title.Item;
+        if (item.MediaId is not { } mediaId)
+        {
+            throw new JellyseerrException(StatusCodes.Status404NotFound, "Nothing to remove: this title hasn't been requested.");
+        }
+
+        if (item.Status == (int)MediaStatus.Available)
+        {
+            throw new JellyseerrException(StatusCodes.Status409Conflict, "This title is already available, there's no download to remove.");
+        }
+
+        string message;
+        if (item.Status == (int)MediaStatus.PartiallyAvailable)
+        {
+            // Keep the seasons that are already there: only cancel what's still open.
+            if (item.OpenRequestIds.Count == 0)
+            {
+                throw new JellyseerrException(StatusCodes.Status409Conflict, "There's no open request to cancel for this show.");
+            }
+
+            foreach (var requestId in item.OpenRequestIds)
+            {
+                await _client.DeleteRequestAsync(requestId, actAs, cancellationToken).ConfigureAwait(false);
+            }
+
+            message = "Cancelled " + item.OpenRequestIds.Count + (item.OpenRequestIds.Count == 1 ? " request" : " requests") + ". Seasons already available are kept.";
+        }
+        else
+        {
+            var arr = mediaType == "movie" ? "Radarr" : "Sonarr";
+            var removedFromArr = false;
+            try
+            {
+                await _client.DeleteMediaFileAsync(mediaId, false, actAs, cancellationToken).ConfigureAwait(false);
+                removedFromArr = true;
+            }
+            catch (JellyseerrException ex) when (ex.StatusCode is not (StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden))
+            {
+                // Older Jellyseerr versions, or titles that never reached Radarr/Sonarr: clearing Jellyseerr still unblocks it.
+                _logger.LogWarning("Jellyseerr Requester: could not remove {Type} {TmdbId} from {Arr}: {Message}", mediaType, tmdbId, arr, ex.Message);
+            }
+
+            await _client.DeleteMediaAsync(mediaId, actAs, cancellationToken).ConfigureAwait(false);
+            message = removedFromArr
+                ? "Removed from " + arr + " and " + JellyseerrClient.ServerName + ". It can be requested again."
+                : "Removed from " + JellyseerrClient.ServerName + ". It can be requested again; check " + arr + " if it's still there.";
+        }
+
+        _logger.LogInformation("{User} removed the download of {Type} {TmdbId} ({Title})", principal.Identity?.Name, mediaType, tmdbId, item.Title);
+        InvalidateTitle(id);
+        return new MessageDto { Message = message };
+    }
+
+    /// <summary>
+    /// Lists titles being downloaded (approved requests that aren't available yet), stalled ones first.
+    /// Users without the Manage Requests or View Requests permission in Jellyseerr only see their own.
+    /// </summary>
+    /// <param name="principal">Current user.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The Downloads row.</returns>
+    public async Task<DiscoverResponseDto> DownloadsAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        var (actAs, _) = await ResolveActorAsync(principal, cancellationToken).ConfigureAwait(false);
+        var key = actAs?.ToString(CultureInfo.InvariantCulture) ?? "owner";
+        var now = DateTime.UtcNow;
+        if (_downloadsCache.TryGetValue(key, out var cached) && cached.Expiry > now && !cached.Task.IsFaulted)
+        {
+            return await cached.Task.ConfigureAwait(false);
+        }
+
+        var task = DownloadsUncachedAsync(actAs);
+        _downloadsCache[key] = (now + DownloadsCacheDuration, task);
+        return await task.ConfigureAwait(false);
+    }
+
+    private async Task<DiscoverResponseDto> DownloadsUncachedAsync(int? actAs)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var raw = await _client.GetRequestsAsync("processing", 100, actAs, cts.Token).ConfigureAwait(false);
+
+        // One entry per title and quality: a show can have several requests.
+        var requests = (raw?["results"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray())
+            .Where(r => r?["media"]?["tmdbId"] is not null && r["status"]?.GetValue<int>() == 2)
+            .GroupBy(r => (r!["media"]!["id"]?.GetValue<int>() ?? 0, r["is4k"]?.GetValue<bool>() == true))
+            .Select(g => g.First()!)
+            .Take(40)
+            .ToList();
+
+        using var gate = new SemaphoreSlim(6);
+        var entries = await Task.WhenAll(requests.Select(async r =>
+        {
+            await gate.WaitAsync(cts.Token).ConfigureAwait(false);
+            try
+            {
+                return await ToDownloadItemAsync(r, cts.Token).ConfigureAwait(false);
+            }
+            catch (JellyseerrException ex)
+            {
+                _logger.LogDebug("Jellyseerr Requester: skipping a download: {Message}", ex.Message);
+                return null;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        })).ConfigureAwait(false);
+
+        var dto = new DiscoverResponseDto { List = "downloads" };
+        dto.Results.AddRange(entries.OfType<DiscoverItemDto>()
+            .OrderByDescending(e => e.Download!.Stale)
+            .ThenBy(e => e.Download!.Since ?? DateTime.MaxValue));
+        return dto;
+    }
+
+    private async Task<DiscoverItemDto?> ToDownloadItemAsync(System.Text.Json.Nodes.JsonNode request, CancellationToken cancellationToken)
+    {
+        var media = request["media"]!;
+        var mediaType = media["mediaType"]?.GetValue<string>();
+        var tmdbId = media["tmdbId"]?.GetValue<int>() ?? 0;
+        if (mediaType is not ("movie" or "tv") || tmdbId <= 0)
+        {
+            return null;
+        }
+
+        var is4K = request["is4k"]?.GetValue<bool>() == true;
+        var id = new VirtualId(mediaType == "movie" ? VirtualKind.Movie : VirtualKind.Series, tmdbId);
+        var title = await GetTitleAsync(id, cancellationToken).ConfigureAwait(false);
+        var item = title.Item;
+
+        var awaited = title.Tv?.Seasons
+            .Where(s => (is4K ? s.Status4K : s.Status) == (int)MediaStatus.Processing)
+            .Select(s => s.AirDate)
+            .LastOrDefault(d => d is not null);
+        var since = ParseDate(request["updatedAt"]?.GetValue<string>()) ?? ParseDate(request["createdAt"]?.GetValue<string>());
+        var download = is4K
+            ? DownloadAnalyzer.Analyze(media, true, awaited ?? item.ReleaseDate, since)
+            : item.Download ?? DownloadAnalyzer.Analyze(media, false, awaited ?? item.ReleaseDate, since);
+        if (download is null)
+        {
+            return null;
+        }
+
+        var libraryId = FindInLibrary(item);
+        var requestedBy = request["requestedBy"];
+        return new DiscoverItemDto
+        {
+            ItemId = (libraryId ?? id.ToGuid()).ToString("N"),
+            InLibrary = libraryId is not null,
+            TmdbId = tmdbId,
+            MediaType = mediaType,
+            Title = item.Title + (is4K ? " (4K)" : string.Empty),
+            Year = item.Year,
+            Status = is4K ? item.Status4K : item.Status,
+            PosterPath = item.PosterPath,
+            Download = download,
+            RequestedBy = requestedBy?["displayName"]?.GetValue<string>() ?? requestedBy?["username"]?.GetValue<string>() ?? requestedBy?["jellyfinUsername"]?.GetValue<string>()
+        };
+    }
+
+    private void InvalidateTitle(VirtualId id)
+    {
+        _titles.TryRemove(id, out _);
+        _searchCache.Clear();
+        _discoverCache.Clear();
+        _downloadsCache.Clear();
+    }
+
     private void MarkRequested(VirtualId id, List<int>? seasons, bool approved)
     {
         var status = approved ? (int)MediaStatus.Processing : (int)MediaStatus.Pending;
@@ -427,6 +702,7 @@ public class RequesterService
         _titles[id] = title with { FetchedAt = DateTime.MinValue };
         _searchCache.Clear();
         _discoverCache.Clear();
+        _downloadsCache.Clear();
     }
 
     // ------------------------------------------------------------------ Jellyfin DTOs
@@ -437,21 +713,22 @@ public class RequesterService
     /// <param name="item">Jellyseerr item.</param>
     /// <param name="tv">TV details, if loaded.</param>
     /// <param name="cannotRequestReason">Why the current user cannot request, if applicable.</param>
+    /// <param name="canRemove">Whether the current user may remove the download.</param>
     /// <returns>The item DTO.</returns>
-    public BaseItemDto ToDto(SearchItemDto item, TvDetailsDto? tv, string? cannotRequestReason)
+    public BaseItemDto ToDto(SearchItemDto item, TvDetailsDto? tv, string? cannotRequestReason, bool canRemove = false)
     {
         var isMovie = item.MediaType == "movie";
         var id = new VirtualId(isMovie ? VirtualKind.Movie : VirtualKind.Series, item.Id);
         var status = EffectiveStatus(item, tv);
 
-        var dto = BaseDto(id, item.Title, status, item.PosterPath, item.BackdropPath);
+        var dto = BaseDto(id, item.Title, status, BadgeStatus(item, tv), item.PosterPath, item.BackdropPath);
         dto.Type = isMovie ? BaseItemKind.Movie : BaseItemKind.Series;
         dto.IsFolder = !isMovie;
         dto.ProductionYear = int.TryParse(item.Year, NumberStyles.Integer, CultureInfo.InvariantCulture, out var year) ? year : null;
         dto.PremiereDate = ParseDate(item.ReleaseDate);
         dto.CommunityRating = item.Rating is > 0 ? (float)Math.Round(item.Rating.Value, 1) : null;
-        dto.Overview = BuildOverview(item.Overview, status, isMovie, cannotRequestReason);
-        dto.Taglines = new[] { StatusText(status) };
+        dto.Overview = BuildOverview(item.Overview, status, isMovie, cannotRequestReason, item.Download, canRemove);
+        dto.Taglines = new[] { StatusText(status, item.Download) };
         dto.Genres = item.Genres ?? Array.Empty<string>();
         dto.RunTimeTicks = item.RuntimeMinutes is > 0 ? TimeSpan.FromMinutes(item.RuntimeMinutes.Value).Ticks : null;
         dto.ProviderIds = new Dictionary<string, string?> { ["Tmdb"] = item.Id.ToString(CultureInfo.InvariantCulture) };
@@ -474,14 +751,14 @@ public class RequesterService
     {
         var seriesId = new VirtualId(VirtualKind.Series, series.Id);
         var id = new VirtualId(VirtualKind.Season, series.Id, season.SeasonNumber);
-        var dto = BaseDto(id, season.Name, season.Status, season.PosterPath ?? series.PosterPath, series.BackdropPath);
+        var dto = BaseDto(id, season.Name, season.Status, season.Status, season.PosterPath ?? series.PosterPath, series.BackdropPath);
         dto.Type = BaseItemKind.Season;
         dto.IsFolder = true;
         dto.IndexNumber = season.SeasonNumber;
         dto.SeriesId = seriesId.ToGuid();
         dto.SeriesName = series.Title;
         dto.ParentId = seriesId.ToGuid();
-        dto.SeriesPrimaryImageTag = ImageTag(series.PosterPath, series.Status);
+        dto.SeriesPrimaryImageTag = ImageTag(series.PosterPath, BadgeStatus(series, null));
         dto.PremiereDate = ParseDate(season.AirDate);
         dto.ProductionYear = dto.PremiereDate?.Year;
         dto.ChildCount = season.EpisodeCount;
@@ -489,7 +766,9 @@ public class RequesterService
             (season.EpisodeCount > 0 ? season.EpisodeCount + " episodes. " : string.Empty) + season.Overview,
             season.Status,
             false,
-            cannotRequestReason);
+            cannotRequestReason,
+            null,
+            false);
         dto.Taglines = new[] { StatusText(season.Status) };
         return dto;
     }
@@ -514,10 +793,19 @@ public class RequesterService
         return item.Status;
     }
 
-    private BaseItemDto BaseDto(VirtualId id, string name, int status, string? posterPath, string? backdropPath)
+    /// <summary>
+    /// Status drawn on the poster: like <see cref="EffectiveStatus"/>, but a stalled download gets its own badge.
+    /// </summary>
+    /// <param name="item">Title.</param>
+    /// <param name="tv">TV details, if loaded.</param>
+    /// <returns>Media status, or <see cref="PosterRenderer.StalledBadge"/>.</returns>
+    public static int BadgeStatus(SearchItemDto item, TvDetailsDto? tv) =>
+        item.Download?.Stale == true ? PosterRenderer.StalledBadge : EffectiveStatus(item, tv);
+
+    private BaseItemDto BaseDto(VirtualId id, string name, int status, int badge, string? posterPath, string? backdropPath)
     {
         var guid = id.ToGuid();
-        var tag = ImageTag(posterPath, status);
+        var tag = ImageTag(posterPath, badge);
         return new BaseItemDto
         {
             Id = guid,
@@ -565,8 +853,11 @@ public class RequesterService
     /// Short label for a status.
     /// </summary>
     /// <param name="status">Media status.</param>
+    /// <param name="download">Download progress, if any.</param>
     /// <returns>Label.</returns>
-    public static string StatusText(int status) => status switch
+    public static string StatusText(int status, DownloadDto? download = null) => download is not null
+        ? (download.Stale ? "Download stalled – " : "Requested – ") + download.Summary.TrimEnd('.')
+        : status switch
     {
         (int)MediaStatus.Pending => "Requested – waiting for approval",
         (int)MediaStatus.Processing => "Requested – downloading",
@@ -576,7 +867,7 @@ public class RequesterService
         _ => "Not in your library – available to request"
     };
 
-    private static string BuildOverview(string? overview, int status, bool isMovie, string? cannotRequestReason)
+    private static string BuildOverview(string? overview, int status, bool isMovie, string? cannotRequestReason, DownloadDto? download, bool canRemove)
     {
         if (!Config.ShowHintInOverview)
         {
@@ -584,7 +875,18 @@ public class RequesterService
         }
 
         string hint;
-        if (JellyseerrMapper.IsRequestable(status) || status == (int)MediaStatus.PartiallyAvailable)
+        if (download is { Stale: true })
+        {
+            hint = "Jellyseerr: the download looks stuck. " + download.Summary
+                + (canRemove
+                    ? " Remove it from your favorites (♥) to cancel it, so it can be requested again."
+                    : " An administrator can remove it so it can be requested again.");
+        }
+        else if (download is not null && status != (int)MediaStatus.PartiallyAvailable)
+        {
+            hint = "Jellyseerr: requested. " + download.Summary;
+        }
+        else if (JellyseerrMapper.IsRequestable(status) || status == (int)MediaStatus.PartiallyAvailable)
         {
             hint = cannotRequestReason is not null
                 ? "Jellyseerr: available to request, but " + char.ToLowerInvariant(cannotRequestReason[0]) + cannotRequestReason[1..]

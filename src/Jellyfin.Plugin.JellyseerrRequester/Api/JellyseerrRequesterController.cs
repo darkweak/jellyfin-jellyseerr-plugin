@@ -71,6 +71,7 @@ public class JellyseerrRequesterController : ControllerBase
             Enable4K = config.Enable4K,
             RequestButton = config.InjectClientScript,
             DiscoverRows = config.ShowDiscoverRows,
+            DownloadsRow = config.ShowDownloadsRow,
             PublicUrl = (string.IsNullOrWhiteSpace(config.PublicJellyseerrUrl) ? config.JellyseerrUrl : config.PublicJellyseerrUrl).TrimEnd('/')
         };
 
@@ -90,6 +91,8 @@ public class JellyseerrRequesterController : ControllerBase
         {
             dto.Reason = ex.Message;
         }
+
+        dto.CanRemove = await _service.CanRemoveAsync(User, cancellationToken).ConfigureAwait(false);
 
         // Known once the user lookup above has talked to the server.
         dto.ServerName = JellyseerrClient.ServerName;
@@ -117,6 +120,29 @@ public class JellyseerrRequesterController : ControllerBase
     [Authorize]
     public Task<ActionResult<DiscoverResponseDto>> GetDiscover([FromRoute] string list)
         => Run(() => _service.DiscoverAsync(list));
+
+    /// <summary>
+    /// Gets the titles being downloaded, with their progress; stalled ones first.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The Downloads row.</returns>
+    [HttpGet("Downloads")]
+    [Authorize]
+    public Task<ActionResult<DiscoverResponseDto>> GetDownloads(CancellationToken cancellationToken)
+        => Run(() => _service.DownloadsAsync(User, cancellationToken));
+
+    /// <summary>
+    /// Removes a title that is being downloaded (e.g. a stalled download), so it can be requested again.
+    /// Needs Jellyfin admin, or the Manage Requests permission in Jellyseerr.
+    /// </summary>
+    /// <param name="body">What to remove.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result message.</returns>
+    [HttpPost("Remove")]
+    [Authorize]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public Task<ActionResult<MessageDto>> Remove([FromBody] RemoveDto body, CancellationToken cancellationToken)
+        => Run(() => _service.RemoveAsync(User, body.MediaType, body.TmdbId, cancellationToken));
 
     /// <summary>
     /// Gets TV seasons and their status for the season picker.

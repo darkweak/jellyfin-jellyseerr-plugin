@@ -6,7 +6,7 @@
 
 ![Jellyfin 12.x](https://img.shields.io/badge/Jellyfin-12.x-00a4dc?style=flat-square&logo=jellyfin&logoColor=white)
 ![Jellyfin 10.11.x](https://img.shields.io/badge/Jellyfin-10.11.x-00a4dc?style=flat-square&logo=jellyfin&logoColor=white)
-![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-4f46e5?style=flat-square)
+![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-4f46e5?style=flat-square)
 ![Works with Jellyseerr, Overseerr and Seerr](https://img.shields.io/badge/works%20with-Jellyseerr%20%C2%B7%20Overseerr%20%C2%B7%20Seerr-4f46e5?style=flat-square)
 
 [What users get](#what-users-get) ·
@@ -57,10 +57,36 @@ Posters carry a badge that updates as Jellyseerr does its job:
 | `+ REQUEST` | Not requested yet |
 | `REQUESTED` | Waiting for approval or a download |
 | `DOWNLOADING` | On its way |
+| `STALLED` | The download looks stuck (see below) |
 | `REQUEST MORE` | Some seasons are missing |
 | `AVAILABLE` | Ready to watch (shown per season) |
 
-### 4. Trending and popular on the home page
+### 4. Downloads, and stalled ones
+Requested titles show how their download is going: progress and time left from Radarr or Sonarr, or *Queued*,
+*Paused*, *Importing*, *Waiting for the release*. A download is **stalled** when:
+
+- Radarr or Sonarr report a problem with it (failed, warning such as a stalled torrent, download client unavailable),
+- it hasn't progressed, or its ETA has passed, for longer than *Stalled after* (24 h by default),
+- or the request was approved that long ago and nothing is in the download queue (no release found, or never sent
+  to Radarr/Sonarr). Titles that aren't released yet are never stalled.
+
+**Removing a download.** Jellyfin administrators, and users with *Manage Requests* in Jellyseerr, can remove a
+download so it stops and can be requested again:
+
+| Title | What Remove does |
+|---|---|
+| Movie, or show with nothing available yet | Removed from Radarr/Sonarr (with any partial files) and cleared in Jellyseerr |
+| Show with some seasons already available | Its open requests are cancelled; the available seasons and their files are kept |
+
+In Jellyfin web, the Request button turns into **Downloading** or **Stalled** and opens the dialog with the
+progress and a **Remove download** button (click twice to confirm). In other apps, removing a *stalled* title from
+your favorites (♥) removes it. A **Downloads** row on the web home page lists every download, stalled ones first.
+
+> [!NOTE]
+> Jellyseerr can't touch the download client itself: after a removal, Radarr/Sonarr may leave the torrent or
+> NZB in the client's queue. Delete it there if it's still listed.
+
+### 5. Trending and popular on the home page
 Jellyfin web's home page gets three more rows, below Jellyfin's own sections: **Trending**, **Popular Movies** and
 **Popular TV Shows**, the same lists as Jellyseerr's *Discover* page. Titles that aren't in the library carry
 their status badge and open their request page. Titles already in the library get a check mark and open the
@@ -82,8 +108,8 @@ hidden, since there's nothing to play yet.
 
    | Jellyfin | Zip |
    |---|---|
-   | 12.x | `jellyseerr-requester_1.2.0.0_jf12.zip` |
-   | 10.11.x | `jellyseerr-requester_1.2.0.0_jf10.11.zip` |
+   | 12.x | `jellyseerr-requester_1.3.0.0_jf12.zip` |
+   | 10.11.x | `jellyseerr-requester_1.3.0.0_jf10.11.zip` |
 
 3. **Stop Jellyfin.** Extract `Jellyfin.Plugin.JellyseerrRequester.dll` into
    `<jellyfin config>/plugins/JellyseerrRequester/`, replacing any older copy. In Docker that's usually
@@ -131,7 +157,7 @@ Use **Test connection** again after changing the URL or key.
 | Setting | Default |
 |---|---|
 | Add Jellyseerr titles to Jellyfin search | On. The main feature; the options below only apply while it's on |
-| Titles per search | 10 movies and 10 shows |
+| Titles per search | 20 movies and 20 shows (up to 100; more Jellyseerr result pages are read for higher numbers) |
 | Leave out titles that are already fully available | On |
 | Show the status on posters | On |
 | Explain how to request at the top of the overview | On |
@@ -146,6 +172,13 @@ Use **Test connection** again after changing the URL or key.
 | Trending and Popular rows on the home page | On. Web only; restart Jellyfin after turning it on or off |
 | Titles per row | 20 |
 | Leave out titles that are already in the library | Off. When off, they show with a check mark and open the library item |
+| Downloads row on the home page | On. Web only; restart Jellyfin after turning it on or off. Users see their own requests unless they can view all requests in Jellyseerr |
+
+**Downloads**
+
+| Setting | Default |
+|---|---|
+| Show a download as stalled after (hours) | 24 |
 
 ### Linking users
 Jellyfin users are matched to Jellyseerr users by **Jellyfin user ID**, then by **username**. Anyone imported with
@@ -262,6 +295,7 @@ src/Jellyfin.Plugin.JellyseerrRequester/
   Plugin.cs, PluginServiceRegistrator.cs   entry point, DI and MVC filter registration
   Configuration/                           settings and the dashboard page
   Jellyseerr/                              Jellyseerr REST client and JSON mapping
+  Jellyseerr/DownloadAnalyzer.cs           download progress and stalled-download detection
   Virtual/VirtualItemFilter.cs             hooks Jellyfin's API (search, details, images, favorites…)
   Virtual/RequesterService.cs              search and title caches, user linking, requests, item DTOs
   Virtual/PosterRenderer.cs                TMDB artwork and status badges

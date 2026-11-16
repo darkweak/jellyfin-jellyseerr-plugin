@@ -2,7 +2,8 @@
  * Jellyseerr Requester - Jellyfin web client integration.
  * Jellyseerr titles are added to search results by the server, so they work in every client
  * (requesting there = adding to favorites). In Jellyfin web, this script also adds a "Request"
- * button with a season picker to their detail pages, and Trending / Popular rows to the home page.
+ * button with a season picker to their detail pages, a Downloads row (progress, stalled downloads, Remove)
+ * and Trending / Popular rows to the home page.
  * Works the same with Jellyseerr and Seerr (same API).
  */
 (function () {
@@ -44,8 +45,12 @@
         requestable: {},
         discover: null,
         discoverAt: 0,
-        discoverPromise: null
+        discoverPromise: null,
+        downloads: null,
+        downloadsAt: 0,
+        downloadsPromise: null
     };
+    var DOWNLOADS_TTL = 60 * 1000;
 
     var DISCOVER_ROWS = [
         { list: 'trending', title: 'Trending' },
@@ -210,6 +215,10 @@
             '#' + BUTTON_ID + ':focus-visible{outline:2px solid #a5b4fc;outline-offset:2px;}',
             '#' + BUTTON_ID + ' .material-icons{font-size:1.35em;}',
             '#' + BUTTON_ID + '[aria-busy="true"]{opacity:.7;cursor:progress;}',
+            '#' + BUTTON_ID + '.jsr-btn-stalled{background:#dc2626;}',
+            '#' + BUTTON_ID + '.jsr-btn-stalled:hover{background:#ef4444;}',
+            '#' + BUTTON_ID + '.jsr-btn-downloading{background:#2563eb;}',
+            '#' + BUTTON_ID + '.jsr-btn-downloading:hover{background:#3b82f6;}',
             '#' + BUTTON_ID + '.jsr-floating{position:fixed;right:1.5em;bottom:1.5em;z-index:1000;box-shadow:0 8px 24px rgba(0,0,0,.4);}',
 
             // Virtual items can't be played: hide play overlays on their cards and play/shuffle/played on their pages.
@@ -233,6 +242,14 @@
             '.jsr-card-flag{position:absolute;top:.4em;right:.4em;display:flex;align-items:center;justify-content:center;width:1.8em;height:1.8em;border-radius:999px;background:#16a34a;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4);}',
             '.jsr-card-flag .material-icons{font-size:1.2em;}',
             '.jsr-discover-track>.card:focus-visible{outline:none;}',
+            'button.card.jsr-dl-card{border:0;padding:0;background:none;font:inherit;text-align:inherit;cursor:pointer;}',
+            '.jsr-card-chip{position:absolute;top:.4em;left:.4em;display:inline-flex;align-items:center;gap:.2em;max-width:calc(100% - .8em);padding:.2em .6em;border-radius:999px;background:#2563eb;color:#fff;font-size:.75em;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 6px rgba(0,0,0,.4);}',
+            '.jsr-card-chip .material-icons{font-size:1.2em;}',
+            '.jsr-card-chip.jsr-stale{background:#dc2626;}',
+            '.jsr-card-chip.jsr-idle{background:#52525b;}',
+            '.jsr-card-bar{position:absolute;left:0;right:0;bottom:0;height:.35em;background:rgba(0,0,0,.55);}',
+            '.jsr-card-bar>span{display:block;height:100%;background:#3b82f6;}',
+            '.jsr-card-bar.jsr-stale>span{background:#ef4444;}',
             '.jsr-discover-track>.card:focus-visible .cardScalable{outline:3px solid #a5b4fc;outline-offset:2px;border-radius:.2em;}',
 
             // Dialog.
@@ -275,7 +292,23 @@
             '.jsr-pill-3{--jsr-c:var(--jsr-s3);--jsr-b:var(--jsr-s3b);}',
             '.jsr-pill-4{--jsr-c:var(--jsr-s4);--jsr-b:var(--jsr-s4b);}',
             '.jsr-pill-5{--jsr-c:var(--jsr-s5);--jsr-b:var(--jsr-s5b);}',
-            '.jsr-pill-6{--jsr-c:var(--jsr-s6);--jsr-b:var(--jsr-s6b);}',
+            '.jsr-pill-6,.jsr-pill-stale{--jsr-c:var(--jsr-s6);--jsr-b:var(--jsr-s6b);}',
+            // Download panel in the dialog.
+            '.jsr-dl{padding:.85em 1em;border-radius:10px;background:var(--jsr-s3b);}',
+            '.jsr-dl.jsr-stale{background:var(--jsr-s6b);}',
+            '.jsr-dl-head{display:flex;align-items:center;gap:.5em;font-weight:600;}',
+            '.jsr-dl-head .material-icons{font-size:1.3em;color:var(--jsr-s3);}',
+            '.jsr-dl.jsr-stale .jsr-dl-head .material-icons{color:var(--jsr-s6);}',
+            '.jsr-dl-age{margin-left:auto;font-weight:400;font-size:.85em;color:var(--jsr-muted);}',
+            '.jsr-dl-bar{height:.4em;margin-top:.7em;border-radius:999px;background:var(--jsr-raised-hover);overflow:hidden;}',
+            '.jsr-dl-bar>span{display:block;height:100%;border-radius:999px;background:var(--jsr-s3);}',
+            '.jsr-dl.jsr-stale .jsr-dl-bar>span{background:var(--jsr-s6);}',
+            '.jsr-dl-text{margin-top:.55em;line-height:1.45;font-size:.92em;color:var(--jsr-muted);}',
+            '.jsr-dl-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.5em 1em;margin-top:.8em;}',
+            '.jsr-dl-actions .jsr-row-sub{white-space:normal;}',
+            '.jsr-btn-danger{background:#dc2626;color:#fff;}',
+            '.jsr-btn-danger:hover{background:#ef4444;}',
+            '.jsr-btn-danger[disabled]:hover{background:#dc2626;}',
             '.jsr-segment{display:inline-flex;padding:3px;border-radius:999px;background:var(--jsr-raised);}',
             '.jsr-segment button{border:0;border-radius:999px;padding:.4em 1.1em;background:none;color:var(--jsr-muted);font:inherit;font-weight:600;cursor:pointer;}',
             '.jsr-segment button[aria-checked="true"]{background:var(--jsr-surface);color:var(--jsr-text);box-shadow:0 1px 3px var(--jsr-shadow);}',
@@ -364,40 +397,47 @@
         }
     }
 
-    // Resolves to true when something about this title can still be requested (cached per page view).
-    function isRequestable(virtualId) {
+    // Resolves to { requestable, download } for this title (cached per page view): whether something can still
+    // be requested, and the download in progress, if any.
+    function titleState(virtualId) {
         var key = JSON.stringify(virtualId);
         if (!state.requestable[key]) {
-            state.requestable[key] = (virtualId.mediaType === 'movie'
-                ? api('GET', 'Title/movie/' + virtualId.tmdbId).then(function (item) {
+            var title = api('GET', 'Title/' + virtualId.mediaType + '/' + virtualId.tmdbId);
+            var requestable = virtualId.mediaType === 'movie'
+                ? title.then(function (item) {
                     return canRequestStatus(item.status) || !!(state.config && state.config.enable4K && canRequestStatus(item.status4K));
                 })
                 : api('GET', 'Tv/' + virtualId.tmdbId).then(function (tv) {
                     return (tv.seasons || []).some(function (s) {
                         return (virtualId.season == null || s.seasonNumber === virtualId.season) && canRequestStatus(s.status);
                     });
-                })).catch(function () { return false; });
+                });
+            state.requestable[key] = Promise.all([requestable, title]).then(function (res) {
+                return { requestable: res[0], download: res[1].download || null };
+            }).catch(function () { return { requestable: false, download: null }; });
         }
         return state.requestable[key];
     }
 
     function ensureButton(virtualId) {
-        isRequestable(virtualId).then(function (requestable) {
+        titleState(virtualId).then(function (st) {
             var id = currentDetailsId();
             var current = id && parseVirtualId(id);
-            if (requestable && current && JSON.stringify(current) === JSON.stringify(virtualId)) {
-                placeButton(virtualId);
-            } else if (!requestable) {
+            var mode = st.requestable ? 'request' : st.download ? (st.download.stale ? 'stalled' : 'downloading') : null;
+            if (mode && current && JSON.stringify(current) === JSON.stringify(virtualId)) {
+                placeButton(virtualId, mode, st.download);
+            } else if (!mode) {
                 removeButton();
             }
         });
     }
 
-    function placeButton(virtualId) {
+    function placeButton(virtualId, mode, download) {
         var page = visibleDetailPage();
         var container = page && page.querySelector('.mainDetailButtons, .detailButtons');
         var btn = document.getElementById(BUTTON_ID);
-        if (btn && btn.getAttribute('data-key') === JSON.stringify(virtualId)
+        var key = JSON.stringify(virtualId) + mode;
+        if (btn && btn.getAttribute('data-key') === key
             && ((container && container.contains(btn)) || (!container && btn.classList.contains('jsr-floating')))) {
             return;
         }
@@ -408,14 +448,22 @@
         btn = document.createElement('button');
         btn.id = BUTTON_ID;
         btn.type = 'button';
-        btn.setAttribute('data-key', JSON.stringify(virtualId));
-        btn.innerHTML = icon('add') + '<span>Request</span>';
-        btn.title = 'Request with ' + ((state.config && state.config.serverName) || 'Jellyseerr');
+        btn.setAttribute('data-key', key);
+        var serverName = (state.config && state.config.serverName) || 'Jellyseerr';
+        if (mode === 'request') {
+            btn.innerHTML = icon('add') + '<span>Request</span>';
+            btn.title = 'Request with ' + serverName;
+        } else {
+            btn.innerHTML = icon(mode === 'stalled' ? 'warning' : 'downloading') + '<span></span>';
+            btn.lastChild.textContent = mode === 'stalled' ? 'Stalled' : (download.short || 'Downloading');
+            btn.title = download.summary || '';
+        }
+        var variant = mode === 'request' ? '' : mode === 'stalled' ? ' jsr-btn-stalled' : ' jsr-btn-downloading';
         if (container) {
-            btn.className = 'button-flat detailButton';
+            btn.className = 'button-flat detailButton' + variant;
             container.insertBefore(btn, container.firstChild);
         } else {
-            btn.className = 'jsr-floating';
+            btn.className = 'jsr-floating' + variant;
             document.body.appendChild(btn);
         }
         btn.addEventListener('click', function () {
@@ -436,6 +484,9 @@
     function tick() {
         if (apiClient() && isHomeRoute()) {
             getConfig().then(function (config) {
+                if (config.configured && config.downloadsRow) {
+                    ensureDownloadsRow(config);
+                }
                 if (config.configured && config.discoverRows) {
                     ensureDiscoverRows(config);
                 }
@@ -521,6 +572,87 @@
         });
     }
 
+    function loadDownloads() {
+        if (state.downloads && Date.now() - state.downloadsAt < DOWNLOADS_TTL) {
+            return Promise.resolve(state.downloads);
+        }
+        if (!state.downloadsPromise) {
+            state.downloadsPromise = api('GET', 'Downloads').then(function (res) {
+                return (res && res.results) || [];
+            }, function (err) {
+                console.warn('Jellyseerr Requester: could not load downloads', err);
+                return [];
+            }).then(function (list) {
+                state.downloads = list;
+                state.downloadsAt = Date.now();
+                state.downloadsPromise = null;
+                return list;
+            });
+        }
+        return state.downloadsPromise;
+    }
+
+    // Requests being downloaded, stalled ones first. Sits above the Trending rows; refreshed on each home visit.
+    function ensureDownloadsRow(config) {
+        var container = homeSectionsContainer();
+        if (!container || container.querySelector('.jsr-downloads') || container.getAttribute('data-jsr-dl-loading')) {
+            return;
+        }
+        container.setAttribute('data-jsr-dl-loading', '1');
+        loadDownloads().then(function (items) {
+            container.removeAttribute('data-jsr-dl-loading');
+            var target = homeSectionsContainer();
+            if (!target || target.querySelector('.jsr-downloads') || !isHomeRoute() || !items.length) {
+                return;
+            }
+            var wrap = document.createElement('div');
+            wrap.className = 'jsr-downloads';
+            var stalled = items.filter(function (i) { return i.download && i.download.stale; }).length;
+            wrap.appendChild(discoverSection({
+                list: 'downloads',
+                title: 'Downloads' + (stalled ? ' · ' + stalled + ' stalled' : ''),
+                link: config.publicUrl ? config.publicUrl + '/requests?filter=processing' : null
+            }, items, config));
+            target.insertBefore(wrap, target.querySelector('.jsr-discover'));
+            wrap.querySelectorAll('.jsr-dl-card').forEach(function (card) {
+                card.addEventListener('click', function () {
+                    if (card.getAttribute('aria-busy') === 'true') {
+                        return;
+                    }
+                    card.setAttribute('aria-busy', 'true');
+                    api('GET', 'Title/' + card.getAttribute('data-type') + '/' + card.getAttribute('data-tmdb')).then(function (item) {
+                        openDialog(item, null);
+                    }, function (err) {
+                        toast(err.message, true);
+                    }).then(function () {
+                        card.removeAttribute('aria-busy');
+                    });
+                });
+            });
+        });
+    }
+
+    function downloadCard(item) {
+        var d = item.download || {};
+        var label = item.title + (item.year ? ' (' + item.year + ')' : '') + ': ' + (d.summary || '') +
+            (item.requestedBy ? ' Requested by ' + item.requestedBy + '.' : '');
+        var chip = d.stale ? icon('warning') + 'Stalled' : escapeHtml(d.short || 'Downloading');
+        var chipClass = d.stale ? ' jsr-stale' : (d.state === 'waiting' || d.state === 'missing' || d.state === 'paused') ? ' jsr-idle' : '';
+        return '<button type="button" class="card overflowPortraitCard card-hoverable jsr-dl-card" data-type="' + escapeHtml(item.mediaType) +
+            '" data-tmdb="' + escapeHtml(item.tmdbId) + '" title="' + escapeHtml(label) + '" aria-label="' + escapeHtml(label) + '">' +
+            '<div class="cardBox cardBox-bottompadded">' +
+            '<div class="cardScalable">' +
+            '<div class="cardPadder cardPadder-overflowPortrait"></div>' +
+            '<div class="cardImageContainer coveredImage cardContent">' +
+            (item.posterPath ? '<img class="jsr-card-img" loading="lazy" decoding="async" alt="" src="' + POSTER_BASE + escapeHtml(item.posterPath) + '">' : '') +
+            '<span class="jsr-card-chip' + chipClass + '">' + chip + '</span>' +
+            (d.progress != null ? '<span class="jsr-card-bar' + (d.stale ? ' jsr-stale' : '') + '"><span style="width:' + (d.progress * 100).toFixed(1) + '%"></span></span>' : '') +
+            '</div></div>' +
+            '<div class="cardText cardTextCentered cardText-first"><bdi>' + escapeHtml(item.title) + '</bdi></div>' +
+            '<div class="cardText cardTextCentered cardText-secondary"><bdi>' + escapeHtml(item.requestedBy || item.year || '') + '</bdi></div>' +
+            '</div></button>';
+    }
+
     function discoverSection(row, items, config) {
         var client = apiClient();
         var serverId = client.serverId ? client.serverId() : '';
@@ -530,15 +662,17 @@
         section.innerHTML =
             '<div class="sectionTitleContainer sectionTitleContainer-cards padded-left padded-right jsr-discover-head">' +
             '<h2 class="sectionTitle sectionTitle-cards">' + escapeHtml(row.title) + '</h2>' +
-            (config.publicUrl
-                ? '<a class="jsr-discover-link" target="_blank" rel="noopener" href="' + escapeHtml(config.publicUrl + '/discover/' + row.list) + '">' +
+            ((row.link || config.publicUrl)
+                ? '<a class="jsr-discover-link" target="_blank" rel="noopener" href="' + escapeHtml(row.link || (config.publicUrl + '/discover/' + row.list)) + '">' +
                   escapeHtml('Open in ' + serverName) + icon('open_in_new') + '</a>'
                 : '') +
             '<button type="button" class="jsr-discover-nav" data-step="-1" aria-label="Scroll left">' + icon('chevron_left') + '</button>' +
             '<button type="button" class="jsr-discover-nav" data-step="1" aria-label="Scroll right">' + icon('chevron_right') + '</button>' +
             '</div>' +
             '<div class="jsr-discover-track padded-left padded-right">' +
-            items.map(function (item) { return discoverCard(item, client, serverId, serverName); }).join('') +
+            items.map(function (item) {
+                return row.list === 'downloads' ? downloadCard(item) : discoverCard(item, client, serverId, serverName);
+            }).join('') +
             '</div>';
 
         var track = section.querySelector('.jsr-discover-track');
@@ -577,8 +711,86 @@
         return !status || status === STATUS.UNKNOWN || status === STATUS.DELETED;
     }
 
-    function pill(status) {
+    function pill(status, download) {
+        if (download && download.stale) {
+            return '<span class="jsr-pill jsr-pill-stale">Stalled</span>';
+        }
         return STATUS_LABEL[status] ? '<span class="jsr-pill jsr-pill-' + status + '">' + STATUS_LABEL[status] + '</span>' : '';
+    }
+
+    function timeAgo(value) {
+        var t = value ? Date.parse(value) : NaN;
+        if (isNaN(t)) {
+            return '';
+        }
+        var minutes = Math.max(1, Math.round((Date.now() - t) / 60000));
+        if (minutes < 60) {
+            return minutes + ' min ago';
+        }
+        var hours = Math.round(minutes / 60);
+        return hours < 48 ? hours + ' h ago' : Math.round(hours / 24) + ' days ago';
+    }
+
+    // Download progress and, for allowed users, the Remove button. Calls onRemoved() once it's gone.
+    function downloadPanel(item, config, onRemoved, onError) {
+        var d = item.download;
+        var panel = document.createElement('div');
+        panel.className = 'jsr-dl' + (d.stale ? ' jsr-stale' : '');
+        var heading = d.stale ? 'Download stalled' : ({
+            waiting: 'Waiting for release', missing: 'Searching for a release', queued: 'Queued',
+            paused: 'Paused', importing: 'Importing'
+        })[d.state] || 'Downloading';
+        var ago = timeAgo(d.since);
+        var removable = item.status !== STATUS.PARTIAL;
+        panel.innerHTML =
+            '<div class="jsr-dl-head">' + icon(d.stale ? 'warning' : 'downloading') + '<span>' + escapeHtml(heading) + '</span>' +
+            (ago ? '<span class="jsr-dl-age">Requested ' + escapeHtml(ago) + '</span>' : '') + '</div>' +
+            (d.progress != null ? '<div class="jsr-dl-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+                Math.floor(d.progress * 100) + '"><span style="width:' + (d.progress * 100).toFixed(1) + '%"></span></div>' : '') +
+            '<div class="jsr-dl-text">' + escapeHtml(d.summary) + '</div>' +
+            (config.canRemove
+                ? '<div class="jsr-dl-actions"><button type="button" class="jsr-btn ' + (d.stale ? 'jsr-btn-danger' : '') + ' jsr-remove">' +
+                  (removable ? 'Remove download' : 'Cancel requests') + '</button>' +
+                  '<span class="jsr-row-sub">' + (removable
+                    ? 'Removes it from ' + (item.mediaType === 'tv' ? 'Sonarr' : 'Radarr') + ' and ' + escapeHtml(config.serverName || 'Jellyseerr') + ', so it can be requested again.'
+                    : 'Cancels the open season requests. Seasons already available are kept.') + '</span></div>'
+                : '');
+
+        var btn = panel.querySelector('.jsr-remove');
+        if (btn) {
+            var armed = false;
+            var label = btn.textContent;
+            var disarm = null;
+            btn.addEventListener('click', function () {
+                if (!armed) {
+                    // Two-step: the first click only arms the button.
+                    armed = true;
+                    btn.textContent = 'Click again to confirm';
+                    btn.classList.add('jsr-btn-danger');
+                    disarm = setTimeout(function () {
+                        armed = false;
+                        btn.textContent = label;
+                        btn.classList.toggle('jsr-btn-danger', !!d.stale);
+                    }, 5000);
+                    return;
+                }
+                clearTimeout(disarm);
+                btn.disabled = true;
+                btn.textContent = 'Removing…';
+                api('POST', 'Remove', { mediaType: item.mediaType, tmdbId: item.id }).then(function (res) {
+                    state.downloads = null;
+                    state.discover = null;
+                    state.requestable = {};
+                    onRemoved(res && res.message ? res.message : 'Removed.');
+                }, function (err) {
+                    armed = false;
+                    btn.disabled = false;
+                    btn.textContent = label;
+                    onError(err.message);
+                });
+            });
+        }
+        return panel;
     }
 
     function notice(iconName, message) {
@@ -754,8 +966,16 @@
             });
         }
 
+        if (item.download) {
+            body.appendChild(downloadPanel(item, config, function (message) {
+                toast(item.title + ': ' + message);
+                close();
+                setTimeout(function () { window.location.reload(); }, 900);
+            }, showError));
+        }
+
         if (!config.canRequest) {
-            statusSlot.innerHTML = pill(item.status);
+            statusSlot.innerHTML = pill(item.status, item.download);
             body.innerHTML = notice('link_off', config.reason || 'Your account can\'t request from Jellyseerr. Ask your server admin.');
             focusInitial();
             return;
@@ -789,7 +1009,7 @@
             var updateMovie = function () {
                 var st = movieQuality === '4k' ? item.status4K : item.status;
                 var ok = canRequestStatus(st);
-                statusSlot.innerHTML = pill(st);
+                statusSlot.innerHTML = pill(st, movieQuality === '4k' ? null : item.download);
                 setPrimary(ok ? (movieQuality === '4k' ? 'Request in 4K' : 'Request') : (DONE_LABEL[st] || 'Request'), ok);
             };
 
@@ -810,7 +1030,7 @@
         }
 
         // TV: load seasons and let the user pick.
-        statusSlot.innerHTML = pill(item.status);
+        statusSlot.innerHTML = pill(item.status, item.download);
         var switchHost = document.createElement('div');
         var listHost = document.createElement('div');
         body.appendChild(switchHost);
@@ -921,7 +1141,7 @@
             if (config.enable4K) {
                 switchHost.appendChild(qualitySwitch(quality, function (q) {
                     quality = q;
-                    statusSlot.innerHTML = pill(q === '4k' ? item.status4K : item.status);
+                    statusSlot.innerHTML = q === '4k' ? pill(item.status4K) : pill(item.status, item.download);
                     showError('');
                     resetSelection();
                     render();
