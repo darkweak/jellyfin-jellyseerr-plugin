@@ -81,6 +81,16 @@ public class JellyseerrRequesterController : ControllerBase
             return dto;
         }
 
+        if (RequesterService.IsDisabledFor(User))
+        {
+            // Turned off for this user: the web script adds nothing.
+            dto.RequestButton = false;
+            dto.DiscoverRows = false;
+            dto.DownloadsRow = false;
+            dto.Reason = RequesterService.DisabledMessage;
+            return dto;
+        }
+
         try
         {
             var user = await _service.ResolveUserAsync(User, cancellationToken).ConfigureAwait(false);
@@ -109,7 +119,11 @@ public class JellyseerrRequesterController : ControllerBase
     [HttpGet("Title/{mediaType}/{tmdbId:int}")]
     [Authorize]
     public Task<ActionResult<SearchItemDto>> GetTitle([FromRoute] string mediaType, [FromRoute] int tmdbId, CancellationToken cancellationToken)
-        => Run(async () => (await _service.GetTitleAsync(ToVirtualId(mediaType, tmdbId), cancellationToken).ConfigureAwait(false)).Item);
+        => Run(async () =>
+        {
+            RequesterService.EnsureEnabledFor(User);
+            return (await _service.GetTitleAsync(ToVirtualId(mediaType, tmdbId), cancellationToken).ConfigureAwait(false)).Item;
+        });
 
     /// <summary>
     /// Gets a home page row: trending titles, popular movies or popular shows.
@@ -119,7 +133,11 @@ public class JellyseerrRequesterController : ControllerBase
     [HttpGet("Discover/{list}")]
     [Authorize]
     public Task<ActionResult<DiscoverResponseDto>> GetDiscover([FromRoute] string list)
-        => Run(() => _service.DiscoverAsync(list));
+        => Run(() =>
+        {
+            RequesterService.EnsureEnabledFor(User);
+            return _service.DiscoverAsync(list);
+        });
 
     /// <summary>
     /// Gets the titles being downloaded, with their progress; stalled ones first.
@@ -153,8 +171,12 @@ public class JellyseerrRequesterController : ControllerBase
     [HttpGet("Tv/{tmdbId:int}")]
     [Authorize]
     public Task<ActionResult<TvDetailsDto>> GetTv([FromRoute] int tmdbId, CancellationToken cancellationToken)
-        => Run(async () => (await _service.GetTitleAsync(new VirtualId(VirtualKind.Series, tmdbId), cancellationToken).ConfigureAwait(false)).Tv
-            ?? throw new JellyseerrException(StatusCodes.Status404NotFound, "Series not found."));
+        => Run(async () =>
+        {
+            RequesterService.EnsureEnabledFor(User);
+            return (await _service.GetTitleAsync(new VirtualId(VirtualKind.Series, tmdbId), cancellationToken).ConfigureAwait(false)).Tv
+                ?? throw new JellyseerrException(StatusCodes.Status404NotFound, "Series not found.");
+        });
 
     /// <summary>
     /// Creates a request in Jellyseerr as the current user's linked Jellyseerr account.

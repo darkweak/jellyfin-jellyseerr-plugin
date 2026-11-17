@@ -56,8 +56,10 @@ public class VirtualItemFilter : IAsyncActionFilter
     {
         if (context.ActionDescriptor is not ControllerActionDescriptor action
             || action.ControllerTypeInfo.Assembly == typeof(Plugin).Assembly
-            || !JellyseerrClient.IsConfigured)
+            || !JellyseerrClient.IsConfigured
+            || RequesterService.IsDisabledFor(context.HttpContext.User))
         {
+            // Plugin turned off for this user: Jellyfin behaves as if it weren't installed.
             await next().ConfigureAwait(false);
             return;
         }

@@ -322,6 +322,32 @@ public class RequesterService
     // ------------------------------------------------------------------ users & requests
 
     /// <summary>
+    /// Whether the administrator turned the plugin off for this Jellyfin user.
+    /// Unauthenticated calls (e.g. poster images) are not considered disabled.
+    /// </summary>
+    /// <param name="principal">Current Jellyfin user.</param>
+    /// <returns>True when the plugin is off for the user.</returns>
+    public static bool IsDisabledFor(ClaimsPrincipal principal)
+        => Guid.TryParse(principal.FindFirstValue(UserIdClaim), out var userId) && Config.IsDisabledFor(userId);
+
+    /// <summary>
+    /// Throws when the administrator turned the plugin off for this Jellyfin user.
+    /// </summary>
+    /// <param name="principal">Current Jellyfin user.</param>
+    public static void EnsureEnabledFor(ClaimsPrincipal principal)
+    {
+        if (IsDisabledFor(principal))
+        {
+            throw new JellyseerrException(StatusCodes.Status403Forbidden, DisabledMessage);
+        }
+    }
+
+    /// <summary>
+    /// Message shown to users the plugin is turned off for.
+    /// </summary>
+    public const string DisabledMessage = "Requesting is turned off for your account. Ask your administrator.";
+
+    /// <summary>
     /// Resolves the Jellyseerr account to request as. Returns null to request as the API key owner.
     /// </summary>
     /// <param name="principal">Current Jellyfin user.</param>
@@ -332,6 +358,11 @@ public class RequesterService
         if (!Guid.TryParse(principal.FindFirstValue(UserIdClaim), out var userId))
         {
             throw new JellyseerrException(StatusCodes.Status403Forbidden, "Could not identify the Jellyfin user.");
+        }
+
+        if (Config.IsDisabledFor(userId))
+        {
+            throw new JellyseerrException(StatusCodes.Status403Forbidden, DisabledMessage);
         }
 
         var linked = await _client.FindLinkedUserAsync(userId, principal.Identity?.Name, cancellationToken).ConfigureAwait(false);
@@ -451,6 +482,7 @@ public class RequesterService
     /// <returns>The Jellyseerr user id to act as (null for the API key owner) and whether they may remove downloads.</returns>
     public async Task<(int? UserId, bool CanManage)> ResolveActorAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
+        EnsureEnabledFor(principal);
         if (principal.IsInRole(AdministratorRole))
         {
             return (null, true);

@@ -180,6 +180,12 @@ Use **Test connection** again after changing the URL or key.
 |---|---|
 | Show a download as stalled after (hours) | 24 |
 
+**Users**
+
+| Setting | Default |
+|---|---|
+| Users the plugin is on for | Everyone. Untick a user to turn the plugin off for them: no Jellyseerr titles in their search, no home page rows, no Request button, and the plugin's API refuses their requests. Takes effect immediately, in every app |
+
 ### Linking users
 Jellyfin users are matched to Jellyseerr users by **Jellyfin user ID**, then by **username**. Anyone imported with
 Jellyseerr's *Users → Import Jellyfin Users*, or who signed in to Jellyseerr with their Jellyfin account, is

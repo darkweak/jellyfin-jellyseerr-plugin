@@ -24,6 +24,8 @@
         #JellyseerrRequesterConfigPage .jsr-group.jsr-off { opacity: .45; }
         #JellyseerrRequesterConfigPage .jsr-notice { display: flex; gap: .6em; align-items: flex-start; margin: .5em 0 0; padding: .75em 1em; border-radius: 12px; background: rgba(217, 119, 6, .14); line-height: 1.4; font-size: .92em; }
         #JellyseerrRequesterConfigPage .jsr-notice[hidden] { display: none; }
+        #JellyseerrRequesterConfigPage .jsr-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(14em, 1fr)); gap: 0 1em; margin-top: .5em; }
+        #JellyseerrRequesterConfigPage .jsr-users .checkboxContainer { margin-bottom: .6em; }
         #JellyseerrRequesterConfigPage .jsr-notice .material-icons { color: #d97706; font-size: 1.25em; flex: none; }
         @media (prefers-reduced-motion: reduce) {
             #JellyseerrRequesterConfigPage .jsr-group { transition: none; }
@@ -132,6 +134,15 @@
                 </div>
 
                 <div class="verticalSection">
+                    <h3 class="sectionTitle">Users</h3>
+                    <p class="fieldDescription">
+                        Untick a user to turn the plugin off for them: no Jellyseerr titles in their search, no home page rows, no Request button,
+                        and they can't request or remove downloads. Jellyfin works for them as if the plugin weren't installed.
+                    </p>
+                    <div id="userList" class="jsr-users" role="group" aria-label="Users the plugin is on for"></div>
+                </div>
+
+                <div class="verticalSection">
                     <h3 class="sectionTitle">Downloads</h3>
                     <div class="inputContainer">
                         <input is="emby-input" type="number" id="StaleAfterHours" min="1" max="720" label="Show a download as stalled after (hours)" />
@@ -205,6 +216,7 @@
             var discoverOptionIds = ['DiscoverItemCount', 'DiscoverHideInLibrary'];
             var searchOptionIds = ['MaxResults', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview'];
             var savedClientScript = null;
+            var disabledUserIds = [];
             var testSeq = 0;
 
             function el(id) { return page.querySelector('#' + id); }
@@ -229,6 +241,48 @@
 
             function syncRestartNotice() {
                 el('restartNotice').hidden = savedClientScript === null || needsClientScript() === savedClientScript;
+            }
+
+            // Jellyfin serializes Guids with or without dashes depending on the endpoint.
+            function normalizeId(id) { return String(id || '').replace(/-/g, '').toLowerCase(); }
+
+            function renderUsers(users) {
+                var list = el('userList');
+                var off = disabledUserIds.map(normalizeId);
+                list.innerHTML = '';
+                users.slice().sort(function (a, b) { return a.Name.localeCompare(b.Name); }).forEach(function (user) {
+                    var box = document.createElement('div');
+                    box.className = 'checkboxContainer';
+                    var label = document.createElement('label');
+                    var input = document.createElement('input');
+                    input.setAttribute('is', 'emby-checkbox');
+                    input.type = 'checkbox';
+                    input.className = 'jsr-user';
+                    input.setAttribute('data-user-id', user.Id);
+                    input.checked = off.indexOf(normalizeId(user.Id)) < 0;
+                    var name = document.createElement('span');
+                    name.textContent = user.Name;
+                    label.appendChild(input);
+                    label.appendChild(name);
+                    box.appendChild(label);
+                    list.appendChild(box);
+                });
+            }
+
+            function readDisabledUserIds() {
+                var boxes = page.querySelectorAll('.jsr-user');
+                if (!boxes.length) {
+                    // User list didn't load: keep what was saved.
+                    return disabledUserIds;
+                }
+                // Only listed users are kept, so deleted users drop out of the setting.
+                var off = [];
+                boxes.forEach(function (box) {
+                    if (!box.checked) {
+                        off.push(box.getAttribute('data-user-id'));
+                    }
+                });
+                return off;
             }
 
             function setStatus(kind, text) {
@@ -276,7 +330,10 @@
 
             page.addEventListener('pageshow', function () {
                 Dashboard.showLoadingMsg();
-                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                Promise.all([ApiClient.getPluginConfiguration(pluginId), ApiClient.getUsers().catch(function () { return []; })]).then(function (res) {
+                    var config = res[0];
+                    disabledUserIds = config.DisabledUserIds || [];
+                    renderUsers(res[1] || []);
                     textFields.forEach(function (f) { el(f).value = config[f] || ''; });
                     boolFields.forEach(function (f) { el(f).checked = !!config[f]; });
                     el('MaxResults').value = config.MaxResults || 20;
@@ -313,6 +370,8 @@
                     config.MaxResults = Math.min(100, Math.max(1, parseInt(el('MaxResults').value, 10) || 20));
                     config.StaleAfterHours = Math.min(720, Math.max(1, parseInt(el('StaleAfterHours').value, 10) || 24));
                     config.DiscoverItemCount = Math.min(60, Math.max(1, parseInt(el('DiscoverItemCount').value, 10) || 20));
+                    config.DisabledUserIds = readDisabledUserIds();
+                    disabledUserIds = config.DisabledUserIds;
                     ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                         el('MaxResults').value = config.MaxResults;
