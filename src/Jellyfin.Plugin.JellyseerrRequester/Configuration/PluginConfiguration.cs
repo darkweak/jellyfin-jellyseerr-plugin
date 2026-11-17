@@ -1,3 +1,4 @@
+using System;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.JellyseerrRequester.Configuration;
@@ -93,6 +94,21 @@ public class PluginConfiguration : BasePluginConfiguration
     /// is added to the Jellyfin web home page.
     /// </summary>
     public bool ShowDownloadsRow { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the Jellyfin users the plugin is turned off for: no Jellyseerr titles in their search,
+    /// no home page rows, no Request button, and the plugin's API refuses their calls.
+    /// </summary>
+#pragma warning disable CA1819 // Arrays keep the XML configuration serializable.
+    public Guid[] DisabledUserIds { get; set; } = Array.Empty<Guid>();
+#pragma warning restore CA1819
+
+    /// <summary>
+    /// Whether the plugin is turned off for a Jellyfin user.
+    /// </summary>
+    /// <param name="userId">Jellyfin user id.</param>
+    /// <returns>True when the user is in <see cref="DisabledUserIds"/>.</returns>
+    public bool IsDisabledFor(Guid userId) => userId != Guid.Empty && Array.IndexOf(DisabledUserIds ?? Array.Empty<Guid>(), userId) >= 0;
 
     /// <summary>
     /// Whether the web client script is needed (Request button or home page rows).
