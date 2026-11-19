@@ -37,7 +37,7 @@ public static partial class AgeRating
 
     /// <summary>
     /// Finds the age rating of a title from Jellyseerr movie or TV details.
-    /// Uses <paramref name="country"/> first, then the US, then the UK, then the strictest rating found anywhere.
+    /// Uses the stricter of <paramref name="country"/> and the US, then the UK, then the strictest rating found anywhere.
     /// </summary>
     /// <param name="raw">Raw Jellyseerr movie or TV details.</param>
     /// <param name="isMovie">Whether <paramref name="raw"/> is a movie.</param>
@@ -58,17 +58,18 @@ public static partial class AgeRating
         // TMDB flags adult (pornographic) titles separately; they rarely carry a certification.
         var adult = raw["adult"]?.GetValueKind() == System.Text.Json.JsonValueKind.True;
 
-        foreach (var preferred in new[] { country, "US", "GB" })
+        // The stricter of the preferred country's and the US rating, so one lenient rating can't let a title through
+        // (France, for example, rates most superhero films "Tous publics"). Then the UK.
+        foreach (var group in new[] { new[] { country, "US" }, new[] { "GB" } })
         {
-            if (string.IsNullOrWhiteSpace(preferred))
-            {
-                continue;
-            }
-
-            var match = ratings.Where(r => r.Country.Equals(preferred, StringComparison.OrdinalIgnoreCase)).OrderByDescending(r => r.Age).FirstOrDefault();
+            var match = ratings
+                .Where(r => group.Any(g => !string.IsNullOrWhiteSpace(g) && r.Country.Equals(g, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(r => r.Age)
+                .FirstOrDefault();
             if (match.Code is not null)
             {
-                return Finish(match.Code, match.Age!.Value, adult);
+                var label = match.Country.Equals(country, StringComparison.OrdinalIgnoreCase) ? match.Code : match.Country.ToUpperInvariant() + " " + match.Code;
+                return Finish(label, match.Age!.Value, adult);
             }
         }
 

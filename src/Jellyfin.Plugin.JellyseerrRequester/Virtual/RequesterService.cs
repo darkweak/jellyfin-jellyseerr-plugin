@@ -198,6 +198,8 @@ public class RequesterService
         fresh.Tagline ??= existing.Tagline;
         fresh.Genres ??= existing.Genres;
         fresh.RuntimeMinutes ??= existing.RuntimeMinutes;
+        fresh.AgeRating ??= existing.AgeRating;
+        fresh.MinimumAge ??= existing.MinimumAge;
         return fresh;
     }
 
@@ -404,13 +406,26 @@ public class RequesterService
         }
 
         var kept = lookups.Where(l => l.Age.IsCompletedSuccessfully && IsAllowedForAge(l.Age.Result, maxAge)).Select(l => l.Item).ToList();
-        if (kept.Count < items.Count)
-        {
-            _logger.LogDebug("Jellyseerr Requester: hid {Count} titles from a child account", items.Count - kept.Count);
-        }
+
+        // Lets the administrator check what a child sees, and why.
+        static string Describe(int? age) => age is { } a ? a.ToString(CultureInfo.InvariantCulture) + "+" : "unrated";
+        _logger.LogInformation(
+            "Jellyseerr Requester: child account {User} (ages {MaxAge} and under, ratings from {Country}): kept {Kept}; hid {Hidden}",
+            principal.Identity?.Name,
+            maxAge,
+            Config.RatingCountry,
+            string.Join(", ", lookups.Where(l => kept.Contains(l.Item)).Select(l => Name(l.Item) + " (" + Describe(l.Age.Result) + ")")),
+            string.Join(", ", lookups.Where(l => !kept.Contains(l.Item)).Select(l => Name(l.Item) + " (" + (l.Age.IsCompletedSuccessfully ? Describe(l.Age.Result) : "rating not known in time") + ")")));
 
         return kept;
     }
+
+    private static string Name<T>(T item) => item switch
+    {
+        SearchItemDto s => s.Title,
+        DiscoverItemDto d => d.Title,
+        _ => item?.ToString() ?? string.Empty
+    };
 
     private static bool IsAllowedForAge(int? minimumAge, int maxAge)
         => minimumAge is { } age ? age <= maxAge : !Config.ChildBlockUnrated;

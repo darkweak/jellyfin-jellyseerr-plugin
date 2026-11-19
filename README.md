@@ -191,7 +191,7 @@ Use **Test connection** again after changing the URL or key.
 
 | Setting | Default |
 |---|---|
-| Age ratings from | United States. Then US, then UK, then the strictest rating found anywhere |
+| Age ratings from | United States. The stricter of this country's and the US rating is used; without either, the UK rating, then the strictest found anywhere |
 | Refuse titles without an age rating | On |
 | Jellyfin tags | `kids` |
 | Radarr and Sonarr tags | Empty. Tags must already exist in Radarr/Sonarr |
