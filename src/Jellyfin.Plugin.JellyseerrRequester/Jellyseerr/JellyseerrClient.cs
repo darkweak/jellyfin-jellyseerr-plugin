@@ -136,8 +136,9 @@ public class JellyseerrClient
     /// <param name="is4K">Whether to request the 4K version.</param>
     /// <param name="jellyseerrUserId">Jellyseerr user to request as, or null for the API key owner.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="arrTags">Radarr/Sonarr tag ids to send with the request; null leaves the server defaults.</param>
     /// <returns>Raw request response.</returns>
-    public Task<JsonNode?> CreateRequestAsync(string mediaType, int tmdbId, IReadOnlyCollection<int>? seasons, bool is4K, int? jellyseerrUserId, CancellationToken cancellationToken)
+    public Task<JsonNode?> CreateRequestAsync(string mediaType, int tmdbId, IReadOnlyCollection<int>? seasons, bool is4K, int? jellyseerrUserId, CancellationToken cancellationToken, IReadOnlyCollection<int>? arrTags = null)
     {
         var body = new JsonObject
         {
@@ -153,7 +154,58 @@ public class JellyseerrClient
                 : JsonValue.Create("all");
         }
 
+        if (arrTags is { Count: > 0 })
+        {
+            body["tags"] = new JsonArray(arrTags.Select(t => (JsonNode)JsonValue.Create(t)!).ToArray());
+        }
+
         return SendAsync(HttpMethod.Post, "/api/v1/request", body, jellyseerrUserId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves Radarr (movies) or Sonarr (shows) tag labels to ids on the server Jellyseerr sends the request to
+    /// (its default server), together with that server's default tags, which a request's own tags replace.
+    /// </summary>
+    /// <param name="mediaType">"movie" or "tv".</param>
+    /// <param name="is4K">Whether the request goes to the 4K server.</param>
+    /// <param name="labels">Tag labels, compared case-insensitively.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Tag ids to send, and the labels that don't exist on the server.</returns>
+    public async Task<(List<int> TagIds, List<string> Missing)> ResolveArrTagsAsync(string mediaType, bool is4K, IReadOnlyCollection<string> labels, CancellationToken cancellationToken)
+    {
+        var service = mediaType == "movie" ? "radarr" : "sonarr";
+        var servers = await SendAsync(HttpMethod.Get, "/api/v1/service/" + service, null, null, cancellationToken).ConfigureAwait(false);
+        var server = servers?.AsArray()
+            .Where(s => s?["is4k"]?.GetValue<bool>() == is4K)
+            .OrderByDescending(s => s?["isDefault"]?.GetValue<bool>() == true)
+            .FirstOrDefault();
+        if (server?["id"]?.GetValue<int>() is not { } serverId)
+        {
+            throw new JellyseerrException(503, $"No {(is4K ? "4K " : string.Empty)}{(service == "radarr" ? "Radarr" : "Sonarr")} server is set up in Jellyseerr.");
+        }
+
+        var details = await SendAsync(HttpMethod.Get, "/api/v1/service/" + service + "/" + serverId.ToString(CultureInfo.InvariantCulture), null, null, cancellationToken).ConfigureAwait(false);
+        var available = (details?["tags"]?.AsArray() ?? new JsonArray())
+            .Select(t => (Id: t?["id"]?.GetValue<int>(), Label: t?["label"]?.GetValue<string>()))
+            .Where(t => t.Id is not null && t.Label is not null)
+            .ToList();
+
+        var ids = (server["activeTags"]?.AsArray() ?? new JsonArray()).Select(t => t?.GetValue<int>()).OfType<int>().ToList();
+        var missing = new List<string>();
+        foreach (var label in labels)
+        {
+            var match = available.FirstOrDefault(t => string.Equals(t.Label, label, StringComparison.OrdinalIgnoreCase));
+            if (match.Id is { } id)
+            {
+                ids.Add(id);
+            }
+            else
+            {
+                missing.Add(label);
+            }
+        }
+
+        return (ids.Distinct().ToList(), missing);
     }
 
     /// <summary>

@@ -362,7 +362,8 @@ public class VirtualItemFilter : IAsyncActionFilter
     private async Task<BaseItemDto> GetItemDtoAsync(VirtualId id, System.Security.Claims.ClaimsPrincipal user, CancellationToken ct)
     {
         var title = await _service.GetTitleAsync(id, ct).ConfigureAwait(false);
-        var reason = await _service.GetCannotRequestReasonAsync(user, ct).ConfigureAwait(false);
+        var reason = await _service.GetCannotRequestReasonAsync(user, ct).ConfigureAwait(false)
+            ?? RequesterService.ChildBlockReason(user, title.Item);
         if (id.Kind == VirtualKind.Season)
         {
             var season = title.Tv?.Seasons.FirstOrDefault(s => s.SeasonNumber == id.Season)
@@ -377,7 +378,8 @@ public class VirtualItemFilter : IAsyncActionFilter
     private async Task<QueryResult<BaseItemDto>> GetSeasonsAsync(VirtualId id, System.Security.Claims.ClaimsPrincipal user, CancellationToken ct)
     {
         var title = await _service.GetTitleAsync(id, ct).ConfigureAwait(false);
-        var reason = await _service.GetCannotRequestReasonAsync(user, ct).ConfigureAwait(false);
+        var reason = await _service.GetCannotRequestReasonAsync(user, ct).ConfigureAwait(false)
+            ?? RequesterService.ChildBlockReason(user, title.Item);
         var seasons = (title.Tv?.Seasons ?? new List<SeasonDto>()).Select(s => _service.ToSeasonDto(title.Item, s, reason)).ToList();
         return new QueryResult<BaseItemDto>(0, seasons.Count, seasons);
     }

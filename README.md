@@ -185,6 +185,28 @@ Use **Test connection** again after changing the URL or key.
 | Setting | Default |
 |---|---|
 | Users the plugin is on for | Everyone. Untick a user to turn the plugin off for them: no Jellyseerr titles in their search, no home page rows, no Request button, and the plugin's API refuses their requests. Takes effect immediately, in every app |
+| Child mode, per user | Adult. Pick an age ("Child, up to 12") to put a user in child mode |
+
+**Child mode**
+
+| Setting | Default |
+|---|---|
+| Age ratings from | United States. Then US, then UK, then the strictest rating found anywhere |
+| Refuse titles without an age rating | On |
+| Jellyfin tags | `kids` |
+| Radarr and Sonarr tags | Empty. Tags must already exist in Radarr/Sonarr |
+
+### Child mode
+A user in child mode can only request titles whose TMDB age rating is at or below their age. Other titles still
+show in search, but the overview, the Request dialog and the heart say the title isn't for their age.
+
+Titles a child requests are tagged automatically:
+- **Radarr/Sonarr tags** are sent with the Jellyseerr request, on top of the server's default tags. If Jellyseerr
+  refuses them (for example, because the account lacks the permissions to set them), the request goes through without them and the
+  Jellyfin log explains why.
+- **Jellyfin tags** are added to the movie or show once it's in the library (straight away if it already is), and
+  added back if a metadata refresh removes them. To let a child see only what's tagged, open their user settings in
+  Jellyfin, *Parental control*, and add the tag under *Allow items with tags*.
 
 ### Linking users
 Jellyfin users are matched to Jellyseerr users by **Jellyfin user ID**, then by **username**. Anyone imported with

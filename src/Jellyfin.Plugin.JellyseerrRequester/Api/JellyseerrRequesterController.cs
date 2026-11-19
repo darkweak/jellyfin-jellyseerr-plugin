@@ -103,6 +103,7 @@ public class JellyseerrRequesterController : ControllerBase
         }
 
         dto.CanRemove = await _service.CanRemoveAsync(User, cancellationToken).ConfigureAwait(false);
+        dto.ChildMaxAge = RequesterService.ChildMaxAgeFor(User);
 
         // Known once the user lookup above has talked to the server.
         dto.ServerName = JellyseerrClient.ServerName;
@@ -122,7 +123,8 @@ public class JellyseerrRequesterController : ControllerBase
         => Run(async () =>
         {
             RequesterService.EnsureEnabledFor(User);
-            return (await _service.GetTitleAsync(ToVirtualId(mediaType, tmdbId), cancellationToken).ConfigureAwait(false)).Item;
+            var item = (await _service.GetTitleAsync(ToVirtualId(mediaType, tmdbId), cancellationToken).ConfigureAwait(false)).Item;
+            return item.ForUser(RequesterService.ChildBlockReason(User, item));
         });
 
     /// <summary>

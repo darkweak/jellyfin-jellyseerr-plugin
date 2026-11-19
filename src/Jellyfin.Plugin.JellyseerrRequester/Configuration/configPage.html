@@ -5,7 +5,7 @@
     <title>Jellyseerr Requester</title>
 </head>
 <body>
-<div id="JellyseerrRequesterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+<div id="JellyseerrRequesterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
     <style>
         #JellyseerrRequesterConfigPage .jsr-intro { max-width: 60ch; opacity: .8; line-height: 1.5; margin-top: .25em; }
         #JellyseerrRequesterConfigPage .jsr-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(13em, 1fr)); gap: .75em; margin: 1.25em 0 0; padding: 0; list-style: none; }
@@ -24,8 +24,12 @@
         #JellyseerrRequesterConfigPage .jsr-group.jsr-off { opacity: .45; }
         #JellyseerrRequesterConfigPage .jsr-notice { display: flex; gap: .6em; align-items: flex-start; margin: .5em 0 0; padding: .75em 1em; border-radius: 12px; background: rgba(217, 119, 6, .14); line-height: 1.4; font-size: .92em; }
         #JellyseerrRequesterConfigPage .jsr-notice[hidden] { display: none; }
-        #JellyseerrRequesterConfigPage .jsr-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(14em, 1fr)); gap: 0 1em; margin-top: .5em; }
-        #JellyseerrRequesterConfigPage .jsr-users .checkboxContainer { margin-bottom: .6em; }
+        #JellyseerrRequesterConfigPage .jsr-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(20em, 1fr)); gap: .25em 1.5em; margin-top: .5em; }
+        #JellyseerrRequesterConfigPage .jsr-user-row { display: flex; align-items: center; justify-content: space-between; gap: 1em; min-height: 2.6em; }
+        #JellyseerrRequesterConfigPage .jsr-user-row .checkboxContainer { margin: 0; min-width: 0; }
+        #JellyseerrRequesterConfigPage .jsr-user-row .checkboxContainer span { overflow-wrap: anywhere; }
+        #JellyseerrRequesterConfigPage .jsr-age { flex: none; width: auto; padding: .35em 2em .35em .6em; font-size: .9em; }
+        #JellyseerrRequesterConfigPage .jsr-age:disabled { opacity: .45; }
         #JellyseerrRequesterConfigPage .jsr-notice .material-icons { color: #d97706; font-size: 1.25em; flex: none; }
         @media (prefers-reduced-motion: reduce) {
             #JellyseerrRequesterConfigPage .jsr-group { transition: none; }
@@ -138,8 +142,39 @@
                     <p class="fieldDescription">
                         Untick a user to turn the plugin off for them: no Jellyseerr titles in their search, no home page rows, no Request button,
                         and they can't request or remove downloads. Jellyfin works for them as if the plugin weren't installed.
+                        Pick an age to put a user in child mode.
                     </p>
                     <div id="userList" class="jsr-users" role="group" aria-label="Users the plugin is on for"></div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Child mode</h3>
+                    <p class="fieldDescription">
+                        Users in child mode can only request titles rated for their age. Their requests are tagged, so you can let them see
+                        only what they asked for with Jellyfin's parental control: in their user settings, Parental control, "Allow items with tags".
+                    </p>
+                    <div class="selectContainer">
+                        <select is="emby-select" id="RatingCountry" label="Age ratings from"></select>
+                        <div class="fieldDescription">Ratings from this country are used first, then US, then UK, then the strictest rating found anywhere.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="ChildBlockUnrated" />
+                            <span>Refuse titles without an age rating</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Some titles, often new or obscure ones, have no rating at all on TMDB.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="ChildJellyfinTags" label="Jellyfin tags" placeholder="kids" />
+                        <div class="fieldDescription">Comma separated. Added to the movie or show in Jellyfin once it's in the library, and added back if a metadata refresh removes them.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="ChildArrTags" label="Radarr and Sonarr tags (optional)" placeholder="kids" />
+                        <div class="fieldDescription">
+                            Comma separated. Sent with the request, in addition to the server's default tags. The tags must already exist in Radarr and Sonarr.
+                            If Jellyseerr refuses them, the request is made without them and the Jellyfin log says why.
+                        </div>
+                    </div>
                 </div>
 
                 <div class="verticalSection">
@@ -211,12 +246,15 @@
         (function () {
             var pluginId = '980e2692-ff98-45ad-9eb2-0df748ceb82e';
             var page = document.querySelector('#JellyseerrRequesterConfigPage');
-            var textFields = ['JellyseerrUrl', 'ApiKey', 'PublicJellyseerrUrl'];
-            var boolFields = ['InjectIntoSearch', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview', 'InjectClientScript', 'AllowUnlinkedUsers', 'Enable4K', 'ShowDiscoverRows', 'DiscoverHideInLibrary', 'ShowDownloadsRow'];
+            var textFields = ['JellyseerrUrl', 'ApiKey', 'PublicJellyseerrUrl', 'ChildJellyfinTags', 'ChildArrTags'];
+            var boolFields = ['InjectIntoSearch', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview', 'InjectClientScript', 'AllowUnlinkedUsers', 'Enable4K', 'ShowDiscoverRows', 'DiscoverHideInLibrary', 'ShowDownloadsRow', 'ChildBlockUnrated'];
             var discoverOptionIds = ['DiscoverItemCount', 'DiscoverHideInLibrary'];
             var searchOptionIds = ['MaxResults', 'HideAvailable', 'BadgePosters', 'ShowHintInOverview'];
             var savedClientScript = null;
             var disabledUserIds = [];
+            var childUsers = [];
+            var childAges = [3, 6, 7, 10, 12, 13, 14, 16];
+            var countries = { US: 'United States', GB: 'United Kingdom', FR: 'France', DE: 'Germany', CA: 'Canada', AU: 'Australia', ES: 'Spain', IT: 'Italy', NL: 'Netherlands', BR: 'Brazil' };
             var testSeq = 0;
 
             function el(id) { return page.querySelector('#' + id); }
@@ -246,43 +284,79 @@
             // Jellyfin serializes Guids with or without dashes depending on the endpoint.
             function normalizeId(id) { return String(id || '').replace(/-/g, '').toLowerCase(); }
 
-            function renderUsers(users) {
-                var list = el('userList');
-                var off = disabledUserIds.map(normalizeId);
-                list.innerHTML = '';
-                users.slice().sort(function (a, b) { return a.Name.localeCompare(b.Name); }).forEach(function (user) {
-                    var box = document.createElement('div');
-                    box.className = 'checkboxContainer';
-                    var label = document.createElement('label');
-                    var input = document.createElement('input');
-                    input.setAttribute('is', 'emby-checkbox');
-                    input.type = 'checkbox';
-                    input.className = 'jsr-user';
-                    input.setAttribute('data-user-id', user.Id);
-                    input.checked = off.indexOf(normalizeId(user.Id)) < 0;
-                    var name = document.createElement('span');
-                    name.textContent = user.Name;
-                    label.appendChild(input);
-                    label.appendChild(name);
-                    box.appendChild(label);
-                    list.appendChild(box);
+            function escapeHtml(text) {
+                return String(text).replace(/[&<>"']/g, function (c) {
+                    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
                 });
             }
 
+            function childAgeOf(userId) {
+                var id = normalizeId(userId);
+                var match = childUsers.filter(function (c) { return normalizeId(c.UserId) === id; })[0];
+                return match ? match.MaxAge : null;
+            }
+
+            // Built from markup so Jellyfin upgrades the emby-checkbox elements.
+            function renderUsers(users) {
+                var off = disabledUserIds.map(normalizeId);
+                el('userList').innerHTML = users.slice().sort(function (a, b) { return a.Name.localeCompare(b.Name); }).map(function (user) {
+                    var age = childAgeOf(user.Id);
+                    var ages = childAges.indexOf(age) < 0 && age !== null ? childAges.concat([age]).sort(function (a, b) { return a - b; }) : childAges;
+                    var options = '<option value="">Adult</option>' + ages.map(function (a) {
+                        return '<option value="' + a + '"' + (a === age ? ' selected' : '') + '>Child, up to ' + a + '</option>';
+                    }).join('');
+                    var enabled = off.indexOf(normalizeId(user.Id)) < 0;
+                    return '<div class="jsr-user-row" data-user-id="' + escapeHtml(user.Id) + '">'
+                        + '<div class="checkboxContainer"><label>'
+                        + '<input is="emby-checkbox" type="checkbox" class="jsr-user"' + (enabled ? ' checked' : '') + ' />'
+                        + '<span>' + escapeHtml(user.Name) + '</span></label></div>'
+                        + '<select class="jsr-age emby-select-withcolor emby-select" aria-label="Child mode for ' + escapeHtml(user.Name) + '"' + (enabled ? '' : ' disabled') + '>' + options + '</select>'
+                        + '</div>';
+                }).join('');
+            }
+
+            function userRows() { return page.querySelectorAll('.jsr-user-row'); }
+
             function readDisabledUserIds() {
-                var boxes = page.querySelectorAll('.jsr-user');
-                if (!boxes.length) {
+                var rows = userRows();
+                if (!rows.length) {
                     // User list didn't load: keep what was saved.
                     return disabledUserIds;
                 }
                 // Only listed users are kept, so deleted users drop out of the setting.
                 var off = [];
-                boxes.forEach(function (box) {
-                    if (!box.checked) {
-                        off.push(box.getAttribute('data-user-id'));
+                rows.forEach(function (row) {
+                    if (!row.querySelector('.jsr-user').checked) {
+                        off.push(row.getAttribute('data-user-id'));
                     }
                 });
                 return off;
+            }
+
+            function readChildUsers() {
+                var rows = userRows();
+                if (!rows.length) {
+                    return childUsers;
+                }
+                var result = [];
+                rows.forEach(function (row) {
+                    var value = row.querySelector('.jsr-age').value;
+                    if (value) {
+                        result.push({ UserId: row.getAttribute('data-user-id'), MaxAge: parseInt(value, 10) });
+                    }
+                });
+                return result;
+            }
+
+            function renderCountries(selected) {
+                var codes = Object.keys(countries);
+                if (selected && codes.indexOf(selected) < 0) {
+                    codes.push(selected);
+                }
+                el('RatingCountry').innerHTML = codes.map(function (code) {
+                    return '<option value="' + escapeHtml(code) + '">' + escapeHtml(countries[code] || code) + '</option>';
+                }).join('');
+                el('RatingCountry').value = selected || 'US';
             }
 
             function setStatus(kind, text) {
@@ -333,7 +407,9 @@
                 Promise.all([ApiClient.getPluginConfiguration(pluginId), ApiClient.getUsers().catch(function () { return []; })]).then(function (res) {
                     var config = res[0];
                     disabledUserIds = config.DisabledUserIds || [];
+                    childUsers = config.ChildUsers || [];
                     renderUsers(res[1] || []);
+                    renderCountries(config.RatingCountry);
                     textFields.forEach(function (f) { el(f).value = config[f] || ''; });
                     boolFields.forEach(function (f) { el(f).checked = !!config[f]; });
                     el('MaxResults').value = config.MaxResults || 20;
@@ -360,6 +436,11 @@
                 syncRestartNotice();
             });
             el('btnTestConnection').addEventListener('click', testConnection);
+            el('userList').addEventListener('change', function (e) {
+                if (e.target.classList.contains('jsr-user')) {
+                    e.target.closest('.jsr-user-row').querySelector('.jsr-age').disabled = !e.target.checked;
+                }
+            });
 
             el('JellyseerrRequesterConfigForm').addEventListener('submit', function (e) {
                 e.preventDefault();
@@ -372,6 +453,9 @@
                     config.DiscoverItemCount = Math.min(60, Math.max(1, parseInt(el('DiscoverItemCount').value, 10) || 20));
                     config.DisabledUserIds = readDisabledUserIds();
                     disabledUserIds = config.DisabledUserIds;
+                    config.ChildUsers = readChildUsers();
+                    childUsers = config.ChildUsers;
+                    config.RatingCountry = el('RatingCountry').value || 'US';
                     ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                         el('MaxResults').value = config.MaxResults;

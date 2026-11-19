@@ -981,6 +981,14 @@
             return;
         }
 
+        // Child mode: titles above the account's age limit can't be requested.
+        if (item.notAllowedReason) {
+            statusSlot.innerHTML = pill(item.status, item.download);
+            body.innerHTML = notice('child_care', item.notAllowedReason);
+            focusInitial();
+            return;
+        }
+
         // After a request, reload so Jellyfin's page shows the new status and poster badge.
         function refreshPage() {
             setTimeout(function () { window.location.reload(); }, 900);

@@ -41,6 +41,9 @@ public class ClientConfigDto
 
     /// <summary>Gets or sets a value indicating whether the Downloads row is added to the home page.</summary>
     public bool DownloadsRow { get; set; }
+
+    /// <summary>Gets or sets the age the user may request up to, when they're in child mode.</summary>
+    public int? ChildMaxAge { get; set; }
 }
 
 /// <summary>
@@ -186,6 +189,27 @@ public class SearchItemDto
     /// <summary>Gets or sets the ids of open (pending or approved) standard-quality requests.</summary>
     [JsonIgnore]
     public List<int> OpenRequestIds { get; set; } = new();
+
+    /// <summary>Gets or sets the age rating, e.g. "PG-13" (only known once details are loaded).</summary>
+    public string? AgeRating { get; set; }
+
+    /// <summary>Gets or sets the minimum age for <see cref="AgeRating"/>.</summary>
+    public int? MinimumAge { get; set; }
+
+    /// <summary>Gets or sets why the current (child) user may not request this title, if so.</summary>
+    public string? NotAllowedReason { get; set; }
+
+    /// <summary>
+    /// Copies the title for one user, so per-user fields don't leak into the shared cache.
+    /// </summary>
+    /// <param name="notAllowedReason">Why this user may not request it.</param>
+    /// <returns>A shallow copy.</returns>
+    public SearchItemDto ForUser(string? notAllowedReason)
+    {
+        var copy = (SearchItemDto)MemberwiseClone();
+        copy.NotAllowedReason = notAllowedReason;
+        return copy;
+    }
 }
 
 /// <summary>

@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.JellyseerrRequester.Api;
+using Jellyfin.Plugin.JellyseerrRequester.Child;
 using Jellyfin.Plugin.JellyseerrRequester.Configuration;
 using Jellyfin.Plugin.JellyseerrRequester.Jellyseerr;
 using MediaBrowser.Controller;
@@ -44,6 +45,7 @@ public class RequesterService
     private readonly JellyseerrClient _client;
     private readonly IServerApplicationHost _host;
     private readonly ILibraryManager _libraryManager;
+    private readonly ChildTagService _childTags;
     private readonly ILogger<RequesterService> _logger;
 
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<List<SearchItemDto>> Task)> _searchCache = new(StringComparer.OrdinalIgnoreCase);
@@ -57,12 +59,14 @@ public class RequesterService
     /// <param name="client">Jellyseerr client.</param>
     /// <param name="host">Server application host.</param>
     /// <param name="libraryManager">Library manager.</param>
+    /// <param name="childTags">Child mode Jellyfin tagging.</param>
     /// <param name="logger">Logger.</param>
-    public RequesterService(JellyseerrClient client, IServerApplicationHost host, ILibraryManager libraryManager, ILogger<RequesterService> logger)
+    public RequesterService(JellyseerrClient client, IServerApplicationHost host, ILibraryManager libraryManager, ChildTagService childTags, ILogger<RequesterService> logger)
     {
         _client = client;
         _host = host;
         _libraryManager = libraryManager;
+        _childTags = childTags;
         _logger = logger;
     }
 
@@ -294,6 +298,7 @@ public class RequesterService
         {
             var raw = await _client.GetMovieAsync(id.TmdbId, cancellationToken).ConfigureAwait(false);
             var item = JellyseerrMapper.ToSearchItem(raw, "movie") ?? throw new JellyseerrException(404, "Movie not found.");
+            SetAgeRating(item, raw, true);
             title = new CachedTitle(item, null, true);
         }
         else
@@ -301,6 +306,7 @@ public class RequesterService
             var raw = await _client.GetTvAsync(id.TmdbId, cancellationToken).ConfigureAwait(false);
             var item = JellyseerrMapper.ToSearchItem(raw, "tv") ?? throw new JellyseerrException(404, "Series not found.");
             var tv = JellyseerrMapper.BuildTvDetails(id.TmdbId, raw);
+            SetAgeRating(item, raw, false);
 
             // What's awaited is the latest season being downloaded, not the show's first episode.
             var awaited = tv.Seasons.Where(s => s.Status == (int)MediaStatus.Processing).Select(s => s.AirDate).LastOrDefault(d => d is not null);
@@ -318,6 +324,48 @@ public class RequesterService
     /// <param name="id">Virtual id.</param>
     /// <returns>The cached title or null.</returns>
     public CachedTitle? PeekTitle(VirtualId id) => _titles.TryGetValue(id.Series, out var t) ? t : null;
+
+    private static void SetAgeRating(SearchItemDto item, System.Text.Json.Nodes.JsonNode? raw, bool isMovie)
+    {
+        var rating = AgeRating.Resolve(raw, isMovie, Config.RatingCountry);
+        item.AgeRating = rating?.Label;
+        item.MinimumAge = rating?.MinimumAge;
+    }
+
+    // ------------------------------------------------------------------ child mode
+
+    /// <summary>
+    /// The age a user may request up to, when the administrator put them in child mode.
+    /// </summary>
+    /// <param name="principal">Current Jellyfin user.</param>
+    /// <returns>Maximum age, or null when the user isn't in child mode.</returns>
+    public static int? ChildMaxAgeFor(ClaimsPrincipal principal)
+        => Guid.TryParse(principal.FindFirstValue(UserIdClaim), out var userId) ? Config.ChildMaxAgeFor(userId) : null;
+
+    /// <summary>
+    /// Why a child account may not request a title, or null when it may (or the user isn't in child mode).
+    /// </summary>
+    /// <param name="principal">Current Jellyfin user.</param>
+    /// <param name="item">Title, with details loaded (see <see cref="GetTitleAsync"/>).</param>
+    /// <returns>Reason or null.</returns>
+    public static string? ChildBlockReason(ClaimsPrincipal principal, SearchItemDto item)
+    {
+        if (ChildMaxAgeFor(principal) is not { } maxAge)
+        {
+            return null;
+        }
+
+        if (item.MinimumAge is not { } age)
+        {
+            return Config.ChildBlockUnrated
+                ? "This title has no age rating, so it can't be requested from a child account. Ask a parent."
+                : null;
+        }
+
+        return age > maxAge
+            ? string.Format(CultureInfo.InvariantCulture, "This title is rated {0} (ages {1}+). Your account can request titles for ages {2} and under. Ask a parent.", item.AgeRating, age, maxAge)
+            : null;
+    }
 
     // ------------------------------------------------------------------ users & requests
 
@@ -416,8 +464,24 @@ public class RequesterService
 
         var user = await ResolveUserAsync(principal, cancellationToken).ConfigureAwait(false);
         var seasons = body.Seasons?.Where(s => s > 0).Distinct().ToList();
-        var result = await _client.CreateRequestAsync(body.MediaType, body.TmdbId, seasons, body.Is4K, user?.Id, cancellationToken).ConfigureAwait(false);
+        var isChild = ChildMaxAgeFor(principal) is not null;
+        if (isChild)
+        {
+            var title = await GetTitleAsync(new VirtualId(body.MediaType == "movie" ? VirtualKind.Movie : VirtualKind.Series, body.TmdbId), cancellationToken).ConfigureAwait(false);
+            if (ChildBlockReason(principal, title.Item) is { } reason)
+            {
+                throw new JellyseerrException(StatusCodes.Status403Forbidden, reason);
+            }
+        }
+
+        var result = isChild
+            ? await CreateChildRequestAsync(body, seasons, user?.Id, cancellationToken).ConfigureAwait(false)
+            : await _client.CreateRequestAsync(body.MediaType, body.TmdbId, seasons, body.Is4K, user?.Id, cancellationToken).ConfigureAwait(false);
         var approved = result?["status"]?.GetValue<int>() == 2;
+        if (isChild)
+        {
+            _childTags.Track(body.MediaType, body.TmdbId, PluginConfiguration.SplitTags(Config.ChildJellyfinTags));
+        }
 
         _logger.LogInformation(
             "{User} requested {Type} {TmdbId}{Seasons} via Jellyseerr (as {JellyseerrUser})",
@@ -433,6 +497,48 @@ public class RequesterService
         }
 
         return new MessageDto { Message = approved ? "Request approved." : "Request submitted.", Approved = approved };
+    }
+
+    /// <summary>
+    /// Creates a child's request with the child mode Radarr/Sonarr tags. If Jellyseerr won't take the tags
+    /// (unknown tags, no server, or not allowed for this account), the request goes through without them.
+    /// </summary>
+    private async Task<System.Text.Json.Nodes.JsonNode?> CreateChildRequestAsync(CreateRequestDto body, List<int>? seasons, int? jellyseerrUserId, CancellationToken cancellationToken)
+    {
+        var labels = PluginConfiguration.SplitTags(Config.ChildArrTags);
+        List<int>? tagIds = null;
+        if (labels.Length > 0)
+        {
+            try
+            {
+                var (ids, missing) = await _client.ResolveArrTagsAsync(body.MediaType, body.Is4K, labels, cancellationToken).ConfigureAwait(false);
+                if (missing.Count > 0)
+                {
+                    _logger.LogWarning("Jellyseerr Requester: child mode tags not found in {Service}: {Tags}. Create them there first.", body.MediaType == "movie" ? "Radarr" : "Sonarr", string.Join(", ", missing));
+                }
+
+                tagIds = ids.Count > 0 ? ids : null;
+            }
+            catch (JellyseerrException ex)
+            {
+                _logger.LogWarning("Jellyseerr Requester: could not read Radarr/Sonarr tags from Jellyseerr: {Message}", ex.Message);
+            }
+        }
+
+        if (tagIds is null)
+        {
+            return await _client.CreateRequestAsync(body.MediaType, body.TmdbId, seasons, body.Is4K, jellyseerrUserId, cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await _client.CreateRequestAsync(body.MediaType, body.TmdbId, seasons, body.Is4K, jellyseerrUserId, cancellationToken, tagIds).ConfigureAwait(false);
+        }
+        catch (JellyseerrException ex) when (ex.StatusCode is StatusCodes.Status400BadRequest or StatusCodes.Status403Forbidden)
+        {
+            _logger.LogWarning("Jellyseerr Requester: Jellyseerr refused the child mode Radarr/Sonarr tags ({Message}); requesting without them", ex.Message);
+            return await _client.CreateRequestAsync(body.MediaType, body.TmdbId, seasons, body.Is4K, jellyseerrUserId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -764,6 +870,7 @@ public class RequesterService
         dto.Genres = item.Genres ?? Array.Empty<string>();
         dto.RunTimeTicks = item.RuntimeMinutes is > 0 ? TimeSpan.FromMinutes(item.RuntimeMinutes.Value).Ticks : null;
         dto.ProviderIds = new Dictionary<string, string?> { ["Tmdb"] = item.Id.ToString(CultureInfo.InvariantCulture) };
+        dto.OfficialRating = item.AgeRating;
         if (tv is not null)
         {
             dto.ChildCount = tv.Seasons.Count;

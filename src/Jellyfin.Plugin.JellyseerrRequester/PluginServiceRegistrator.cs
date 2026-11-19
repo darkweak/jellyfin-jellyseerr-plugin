@@ -1,3 +1,4 @@
+using Jellyfin.Plugin.JellyseerrRequester.Child;
 using Jellyfin.Plugin.JellyseerrRequester.Injection;
 using Jellyfin.Plugin.JellyseerrRequester.Jellyseerr;
 using Jellyfin.Plugin.JellyseerrRequester.Virtual;
@@ -17,6 +18,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddSingleton<JellyseerrClient>();
+        serviceCollection.AddSingleton<ChildTagService>();
+        serviceCollection.AddHostedService(sp => sp.GetRequiredService<ChildTagService>());
         serviceCollection.AddSingleton<RequesterService>();
         serviceCollection.AddSingleton<PosterRenderer>();
         serviceCollection.AddScoped<VirtualItemFilter>();
