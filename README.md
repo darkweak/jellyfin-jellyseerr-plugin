@@ -197,8 +197,11 @@ Use **Test connection** again after changing the URL or key.
 | Radarr and Sonarr tags | Empty. Tags must already exist in Radarr/Sonarr |
 
 ### Child mode
-A user in child mode can only request titles whose TMDB age rating is at or below their age. Other titles still
-show in search, but the overview, the Request dialog and the heart say the title isn't for their age.
+A user in child mode only sees and requests titles whose TMDB age rating is at or below their age. Titles above it
+are left out of their search results and of the Trending and Popular home page rows (as are unrated ones, unless
+*Refuse titles without an age rating* is off). Jellyseerr results carry no rating, so the plugin looks each one up;
+the first search for a term, or the first home page load, can take a few seconds longer. Titles whose rating isn't
+known in time (4 seconds for search, 8 for home rows) are left out until the next try. Ratings are cached for 12 hours.
 
 Titles a child requests are tagged automatically:
 - **Radarr/Sonarr tags** are sent with the Jellyseerr request, on top of the server's default tags. If Jellyseerr

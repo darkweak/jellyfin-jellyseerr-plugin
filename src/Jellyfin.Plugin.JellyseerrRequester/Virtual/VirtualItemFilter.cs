@@ -32,6 +32,9 @@ public class VirtualItemFilter : IAsyncActionFilter
 {
     private static readonly TimeSpan SearchWait = TimeSpan.FromSeconds(6);
 
+    // Extra wait for the age ratings of a child account's results.
+    private static readonly TimeSpan ChildRatingWait = TimeSpan.FromSeconds(4);
+
     private readonly RequesterService _service;
     private readonly PosterRenderer _posters;
     private readonly ILogger<VirtualItemFilter> _logger;
@@ -128,7 +131,7 @@ public class VirtualItemFilter : IAsyncActionFilter
             return;
         }
 
-        var extra = await GetSearchItemsAsync(search, movies, series, result.Items, context.HttpContext.RequestAborted).ConfigureAwait(false);
+        var extra = await GetSearchItemsAsync(search, movies, series, result.Items, context.HttpContext.User, context.HttpContext.RequestAborted).ConfigureAwait(false);
         if (extra.Count == 0)
         {
             return;
@@ -155,7 +158,7 @@ public class VirtualItemFilter : IAsyncActionFilter
         }
 
         var existing = result.SearchHints.Select(h => new BaseItemDto { Name = h.Name, ProductionYear = h.ProductionYear, Type = h.Type }).ToList();
-        var extra = await GetSearchItemsAsync(search, movies, series, existing, context.HttpContext.RequestAborted).ConfigureAwait(false);
+        var extra = await GetSearchItemsAsync(search, movies, series, existing, context.HttpContext.User, context.HttpContext.RequestAborted).ConfigureAwait(false);
         if (extra.Count == 0)
         {
             return;
@@ -181,7 +184,7 @@ public class VirtualItemFilter : IAsyncActionFilter
         objectResult.Value = new SearchHintResult(hints, result.TotalRecordCount + extra.Count);
     }
 
-    private async Task<List<SearchItemDto>> GetSearchItemsAsync(Task<List<SearchItemDto>> search, bool movies, bool series, IReadOnlyList<BaseItemDto> libraryItems, CancellationToken cancellationToken)
+    private async Task<List<SearchItemDto>> GetSearchItemsAsync(Task<List<SearchItemDto>> search, bool movies, bool series, IReadOnlyList<BaseItemDto> libraryItems, System.Security.Claims.ClaimsPrincipal user, CancellationToken cancellationToken)
     {
         // Don't hold up Jellyfin's own results for long if Jellyseerr is slow.
         var finished = await Task.WhenAny(search, Task.Delay(SearchWait, cancellationToken)).ConfigureAwait(false);
@@ -206,9 +209,12 @@ public class VirtualItemFilter : IAsyncActionFilter
 
         var max = Math.Clamp(Config.MaxResults, 1, 100);
         var results = search.Result;
-        return results.Where(i => i.MediaType == "movie" && movies && !InLibrary(i)).Take(max)
+        var items = results.Where(i => i.MediaType == "movie" && movies && !InLibrary(i)).Take(max)
             .Concat(results.Where(i => i.MediaType == "tv" && series && !InLibrary(i)).Take(max))
             .ToList();
+
+        // Child mode: titles above the child's age don't show up at all.
+        return await _service.FilterForChildAsync(user, items, ChildRatingWait, cancellationToken).ConfigureAwait(false);
     }
 
     private static string NormalizeTitle(string? title)

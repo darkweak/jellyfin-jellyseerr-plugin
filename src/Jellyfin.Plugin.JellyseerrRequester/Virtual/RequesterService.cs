@@ -42,6 +42,9 @@ public class RequesterService
     private static readonly TimeSpan DiscoverCacheDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan DownloadsCacheDuration = TimeSpan.FromSeconds(45);
 
+    // Age ratings hardly ever change; keep them long so child searches stay fast.
+    private static readonly TimeSpan AgeRatingCacheDuration = TimeSpan.FromHours(12);
+
     private readonly JellyseerrClient _client;
     private readonly IServerApplicationHost _host;
     private readonly ILibraryManager _libraryManager;
@@ -50,6 +53,8 @@ public class RequesterService
 
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<List<SearchItemDto>> Task)> _searchCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<VirtualId, CachedTitle> _titles = new();
+    private readonly ConcurrentDictionary<VirtualId, (DateTime Expiry, Task<int?> Age)> _ageRatings = new();
+    private readonly SemaphoreSlim _ratingLookups = new(6, 6);
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<DiscoverResponseDto> Task)> _discoverCache = new();
     private readonly ConcurrentDictionary<string, (DateTime Expiry, Task<DiscoverResponseDto> Task)> _downloadsCache = new();
 
@@ -325,11 +330,12 @@ public class RequesterService
     /// <returns>The cached title or null.</returns>
     public CachedTitle? PeekTitle(VirtualId id) => _titles.TryGetValue(id.Series, out var t) ? t : null;
 
-    private static void SetAgeRating(SearchItemDto item, System.Text.Json.Nodes.JsonNode? raw, bool isMovie)
+    private void SetAgeRating(SearchItemDto item, System.Text.Json.Nodes.JsonNode? raw, bool isMovie)
     {
         var rating = AgeRating.Resolve(raw, isMovie, Config.RatingCountry);
         item.AgeRating = rating?.Label;
         item.MinimumAge = rating?.MinimumAge;
+        _ageRatings[new VirtualId(isMovie ? VirtualKind.Movie : VirtualKind.Series, item.Id)] = (DateTime.UtcNow + AgeRatingCacheDuration, Task.FromResult(item.MinimumAge));
     }
 
     // ------------------------------------------------------------------ child mode
@@ -341,6 +347,99 @@ public class RequesterService
     /// <returns>Maximum age, or null when the user isn't in child mode.</returns>
     public static int? ChildMaxAgeFor(ClaimsPrincipal principal)
         => Guid.TryParse(principal.FindFirstValue(UserIdClaim), out var userId) ? Config.ChildMaxAgeFor(userId) : null;
+
+    /// <summary>
+    /// For a user in child mode, keeps only the titles rated for their age. Search results carry no age rating,
+    /// so each title's details are looked up (a few at a time, cached for hours). Titles whose rating isn't known
+    /// within <paramref name="budget"/> are left out; the lookups carry on, so the next search has them.
+    /// </summary>
+    /// <param name="principal">Current Jellyfin user.</param>
+    /// <param name="items">Titles to filter.</param>
+    /// <param name="budget">How long to wait for age ratings.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The titles the user may see, in the same order; <paramref name="items"/> itself for other users.</returns>
+    public Task<List<SearchItemDto>> FilterForChildAsync(ClaimsPrincipal principal, List<SearchItemDto> items, TimeSpan budget, CancellationToken cancellationToken)
+        => FilterForChildAsync(principal, items, i => ToVirtualId(i.MediaType, i.Id), budget, cancellationToken);
+
+    /// <summary>
+    /// Gets a home page row for the current user: in child mode, without the titles above the child's age.
+    /// </summary>
+    /// <param name="principal">Current Jellyfin user.</param>
+    /// <param name="list">"trending", "movies" or "tv".</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The row.</returns>
+    public async Task<DiscoverResponseDto> DiscoverAsync(ClaimsPrincipal principal, string list, CancellationToken cancellationToken)
+    {
+        var row = await DiscoverAsync(list).ConfigureAwait(false);
+        if (ChildMaxAgeFor(principal) is null)
+        {
+            return row;
+        }
+
+        // Rows load in the background on the home page, so they can wait longer than search.
+        var kept = await FilterForChildAsync(principal, row.Results, i => ToVirtualId(i.MediaType, i.TmdbId), TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false);
+        var filtered = new DiscoverResponseDto { List = row.List };
+        filtered.Results.AddRange(kept);
+        return filtered;
+    }
+
+    private static VirtualId ToVirtualId(string mediaType, int tmdbId) => new(mediaType == "movie" ? VirtualKind.Movie : VirtualKind.Series, tmdbId);
+
+    private async Task<List<T>> FilterForChildAsync<T>(ClaimsPrincipal principal, List<T> items, Func<T, VirtualId> idOf, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        if (ChildMaxAgeFor(principal) is not { } maxAge || items.Count == 0)
+        {
+            return items;
+        }
+
+        var lookups = items.Select(i => (Item: i, Age: MinimumAgeAsync(idOf(i)))).ToList();
+        var all = Task.WhenAll(lookups.Select(l => l.Age));
+        try
+        {
+            await Task.WhenAny(all, Task.Delay(budget, cancellationToken)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Client gave up; filter with what's known.
+        }
+
+        var kept = lookups.Where(l => l.Age.IsCompletedSuccessfully && IsAllowedForAge(l.Age.Result, maxAge)).Select(l => l.Item).ToList();
+        if (kept.Count < items.Count)
+        {
+            _logger.LogDebug("Jellyseerr Requester: hid {Count} titles from a child account", items.Count - kept.Count);
+        }
+
+        return kept;
+    }
+
+    private static bool IsAllowedForAge(int? minimumAge, int maxAge)
+        => minimumAge is { } age ? age <= maxAge : !Config.ChildBlockUnrated;
+
+    private Task<int?> MinimumAgeAsync(VirtualId id)
+    {
+        if (_ageRatings.TryGetValue(id, out var cached) && cached.Expiry > DateTime.UtcNow && !cached.Age.IsFaulted)
+        {
+            return cached.Age;
+        }
+
+        var lookup = FetchMinimumAgeAsync(id);
+        _ageRatings[id] = (DateTime.UtcNow + AgeRatingCacheDuration, lookup);
+        return lookup;
+    }
+
+    private async Task<int?> FetchMinimumAgeAsync(VirtualId id)
+    {
+        await _ratingLookups.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // Not tied to the search request: a lookup that finishes late still fills the cache.
+            return (await GetTitleAsync(id, CancellationToken.None).ConfigureAwait(false)).Item.MinimumAge;
+        }
+        finally
+        {
+            _ratingLookups.Release();
+        }
+    }
 
     /// <summary>
     /// Why a child account may not request a title, or null when it may (or the user isn't in child mode).

@@ -131,14 +131,15 @@ public class JellyseerrRequesterController : ControllerBase
     /// Gets a home page row: trending titles, popular movies or popular shows.
     /// </summary>
     /// <param name="list">"trending", "movies" or "tv".</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The row.</returns>
     [HttpGet("Discover/{list}")]
     [Authorize]
-    public Task<ActionResult<DiscoverResponseDto>> GetDiscover([FromRoute] string list)
+    public Task<ActionResult<DiscoverResponseDto>> GetDiscover([FromRoute] string list, CancellationToken cancellationToken)
         => Run(() =>
         {
             RequesterService.EnsureEnabledFor(User);
-            return _service.DiscoverAsync(list);
+            return _service.DiscoverAsync(User, list, cancellationToken);
         });
 
     /// <summary>
